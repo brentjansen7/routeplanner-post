@@ -369,12 +369,6 @@
         return c;
     }
 
-    // Edge cost between consecutive stops, handling open-route tail
-    function edge(order, idx, dist, n, round) {
-        if (idx === n - 1) return round ? dist[order[n - 1]][order[0]] : 0;
-        return dist[order[idx]][order[idx + 1]];
-    }
-
     // --- Brute-force for small n (≤ 8) ---
 
     function bruteForce(dist, n, round) {
@@ -448,7 +442,7 @@
                         const after = dist[order[i - 1]][order[j]] + dist[order[i]][nextJ];
                         delta = after - before;
                     }
-                    if (delta < -0.5) {
+                    if (delta < -1e-6) {
                         // Reverse segment [i..j]
                         let lo = i, hi = j;
                         while (lo < hi) {
@@ -499,7 +493,7 @@
                         const insertCost = dist[order[j]][segFirst] + dist[segLast][jNext]
                             - dist[order[j]][jNext];
 
-                        if (insertCost - removalGain < -0.5) {
+                        if (insertCost - removalGain < -1e-6) {
                             // Perform move
                             const segment = order.splice(i, segLen);
                             const insertPos = j < i ? j + 1 : j + 1 - segLen;
@@ -523,7 +517,7 @@
             improve2Opt(order, dist, round);
             improveOrOpt(order, dist, round);
             const newCost = routeCost(order, dist, round);
-            if (prevCost - newCost < 0.5) break;
+            if (prevCost - newCost < 0.001) break;
             prevCost = newCost;
         }
     }
@@ -551,6 +545,24 @@
         return [...seg1, ...seg3, ...seg2, ...seg4];
     }
 
+    // --- Normalize: ensure node 0 is at position 0 ---
+
+    function normalizeOrder(order, dist, round) {
+        const idx0 = order.indexOf(0);
+        if (idx0 === 0) return order;
+
+        if (round) {
+            // Cycle: rotate so 0 is first (cost doesn't change)
+            return [...order.slice(idx0), ...order.slice(0, idx0)];
+        } else {
+            // Open route: move 0 to front, re-optimize rest
+            order.splice(idx0, 1);
+            order.unshift(0);
+            localSearch(order, dist, round);
+            return order;
+        }
+    }
+
     // --- Main solver ---
 
     function solveTSP(distanceMatrix) {
@@ -570,49 +582,36 @@
         let globalBest = null;
         let globalBestCost = Infinity;
 
+        function tryCandidate(order) {
+            // Always normalize so node 0 is first
+            order = normalizeOrder(order, distanceMatrix, round);
+            const cost = routeCost(order, distanceMatrix, round);
+            if (cost < globalBestCost) {
+                globalBestCost = cost;
+                globalBest = [...order];
+            }
+        }
+
         // Phase 1: Multi-start nearest neighbor from every node
         for (let start = 0; start < n; start++) {
             const order = nearestNeighbor(distanceMatrix, n, start);
             localSearch(order, distanceMatrix, round);
+            tryCandidate(order);
 
-            const cost = routeCost(order, distanceMatrix, round);
-            if (cost < globalBestCost) {
-                globalBestCost = cost;
-                globalBest = [...order];
+            // For round trips, also try the reverse direction
+            if (round) {
+                const rev = [order[0], ...order.slice(1).reverse()];
+                localSearch(rev, distanceMatrix, round);
+                tryCandidate(rev);
             }
         }
 
         // Phase 2: Perturbation — double-bridge kicks to escape local optima
-        // Run more kicks for medium-sized inputs, fewer for large
         const kicks = n <= 20 ? 50 : (n <= 40 ? 30 : 15);
         for (let k = 0; k < kicks; k++) {
-            let order = doubleBridge([...globalBest]);
+            const order = doubleBridge([...globalBest]);
             localSearch(order, distanceMatrix, round);
-            const cost = routeCost(order, distanceMatrix, round);
-            if (cost < globalBestCost) {
-                globalBestCost = cost;
-                globalBest = [...order];
-            }
-        }
-
-        // Phase 3: Normalize — rotate best solution so that original index 0 is first
-        // This keeps the user's first-added stop as the start
-        const idx0 = globalBest.indexOf(0);
-        if (idx0 > 0) {
-            if (round) {
-                // For round trip, rotate freely
-                globalBest = [...globalBest.slice(idx0), ...globalBest.slice(0, idx0)];
-            } else {
-                // For open route, the start was already fixed by NN (index 0)
-                // but double-bridge may have moved it. Re-run local search with 0 fixed.
-                if (globalBest[0] !== 0) {
-                    // Move 0 back to front and re-optimize
-                    const pos = globalBest.indexOf(0);
-                    globalBest.splice(pos, 1);
-                    globalBest.unshift(0);
-                    localSearch(globalBest, distanceMatrix, round);
-                }
-            }
+            tryCandidate(order);
         }
 
         return globalBest;
@@ -628,8 +627,9 @@
             // Get distance matrix from OSRM
             const matrix = await getDistanceMatrix(state.stops);
 
-            // Solve TSP
-            const optimalOrder = solveTSP(matrix.distances);
+            // Solve TSP using durations — this prefers main roads over
+            // zigzagging through side streets, producing smoother routes
+            const optimalOrder = solveTSP(matrix.durations);
 
             // Reorder stops
             const reordered = optimalOrder.map(i => state.stops[i]);
