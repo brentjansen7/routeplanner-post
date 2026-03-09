@@ -286,9 +286,19 @@
     }
 
     // --- OSRM profile mapping ---
+    // The OSRM demo server only supports 'driving'. For cycling/foot we fall
+    // back to driving routing but apply a speed factor so estimated times are
+    // more realistic. The geometry still follows roads.
     function osrmProfile() {
-        // OSRM demo server profiles: driving, cycling (not "bike"), foot (not "walking")
-        return state.travelMode; // 'driving', 'cycling', or 'foot'
+        // OSRM demo only reliably supports 'driving'
+        return 'driving';
+    }
+
+    function speedFactor() {
+        // Rough speed ratios relative to driving to adjust duration estimates
+        if (state.travelMode === 'cycling') return 3.5;
+        if (state.travelMode === 'foot') return 10;
+        return 1;
     }
 
     // --- OSRM Distance Matrix ---
@@ -300,6 +310,16 @@
 
         if (data.code !== 'Ok') {
             throw new Error('OSRM table request failed: ' + data.code);
+        }
+
+        // Apply speed factor to durations for non-driving modes
+        const factor = speedFactor();
+        if (factor !== 1) {
+            for (let i = 0; i < data.durations.length; i++) {
+                for (let j = 0; j < data.durations[i].length; j++) {
+                    data.durations[i][j] *= factor;
+                }
+            }
         }
 
         return {
@@ -317,6 +337,17 @@
 
         if (data.code !== 'Ok') {
             throw new Error('OSRM route request failed: ' + data.code);
+        }
+
+        // Adjust duration for non-driving modes
+        const factor = speedFactor();
+        if (factor !== 1) {
+            data.routes[0].duration *= factor;
+            if (data.routes[0].legs) {
+                data.routes[0].legs.forEach(leg => {
+                    leg.duration *= factor;
+                });
+            }
         }
 
         return data.routes[0];
