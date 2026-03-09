@@ -285,16 +285,7 @@
         }
     }
 
-    // --- OSRM profile mapping ---
-    // Try the mode-specific profile first, fall back to driving.
-    // OSRM demo server may not support bicycle/foot for all endpoints.
-    function osrmProfiles() {
-        if (state.travelMode === 'cycling') return ['bicycle', 'driving'];
-        if (state.travelMode === 'foot') return ['foot', 'driving'];
-        return ['driving'];
-    }
-
-    // --- Haversine fallback for distance matrix ---
+    // --- Haversine helper ---
     function haversineDistance(lat1, lng1, lat2, lng2) {
         const R = 6371000;
         const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -305,14 +296,69 @@
         return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     }
 
+    // --- BRouter: cycling & walking routing via brouter.de ---
+    // BRouter uses OpenStreetMap data and supports footpaths, bike paths,
+    // side streets, and pedestrian zones that OSRM driving ignores.
+    function brouterProfile() {
+        if (state.travelMode === 'cycling') return 'trekking';
+        if (state.travelMode === 'foot') return 'shortest';
+        return null;
+    }
+
+    // Get route between two points via BRouter (returns {distance, duration})
+    async function brouterPairRoute(from, to, profile) {
+        const lonlats = `${from.lng},${from.lat}|${to.lng},${to.lat}`;
+        const url = `https://brouter.de/brouter?lonlats=${lonlats}&profile=${profile}&alternativeidx=0&format=geojson`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`BRouter HTTP ${res.status}`);
+        const data = await res.json();
+        const feat = data.features[0];
+        return {
+            distance: parseFloat(feat.properties['track-length']),
+            duration: parseFloat(feat.properties['total-time']),
+        };
+    }
+
+    // Build distance matrix via BRouter (pairwise routing)
+    async function brouterDistanceMatrix(stops) {
+        const n = stops.length;
+        const distances = Array.from({ length: n }, () => new Array(n).fill(0));
+        const durations = Array.from({ length: n }, () => new Array(n).fill(0));
+        const profile = brouterProfile();
+
+        // Build all pairs and fetch in parallel (with concurrency limit)
+        const pairs = [];
+        for (let i = 0; i < n; i++) {
+            for (let j = 0; j < n; j++) {
+                if (i !== j) pairs.push([i, j]);
+            }
+        }
+
+        // Limit concurrency to avoid overwhelming BRouter
+        const BATCH = 4;
+        for (let b = 0; b < pairs.length; b += BATCH) {
+            const batch = pairs.slice(b, b + BATCH);
+            const results = await Promise.all(
+                batch.map(([i, j]) => brouterPairRoute(stops[i], stops[j], profile))
+            );
+            batch.forEach(([i, j], idx) => {
+                distances[i][j] = results[idx].distance;
+                durations[i][j] = results[idx].duration;
+            });
+        }
+
+        console.log(`Distance matrix: using BRouter profile "${profile}"`);
+        return { distances, durations };
+    }
+
+    // Haversine fallback matrix (if all routing services fail)
     function buildHaversineMatrix(stops) {
         const n = stops.length;
         const distances = Array.from({ length: n }, () => new Array(n).fill(0));
         const durations = Array.from({ length: n }, () => new Array(n).fill(0));
-        // Average speeds (m/s): cycling ~15km/h, foot ~5km/h, driving ~40km/h
         const speed = state.travelMode === 'cycling' ? 4.2
             : state.travelMode === 'foot' ? 1.4 : 11;
-        const roadFactor = 1.35; // roads are ~35% longer than straight-line
+        const roadFactor = 1.35;
         for (let i = 0; i < n; i++) {
             for (let j = 0; j < n; j++) {
                 if (i === j) continue;
@@ -324,50 +370,69 @@
         return { distances, durations };
     }
 
-    // --- OSRM Distance Matrix (with fallback chain) ---
+    // --- Distance Matrix (BRouter for bike/foot, OSRM for driving) ---
     async function getDistanceMatrix(stops) {
-        const coords = stops.map(s => `${s.lng},${s.lat}`).join(';');
-
-        for (const profile of osrmProfiles()) {
+        // For cycling/walking: use BRouter which knows about bike paths & footpaths
+        if (brouterProfile()) {
             try {
-                const url = `https://router.project-osrm.org/table/v1/${profile}/${coords}?annotations=duration,distance`;
-                const res = await fetch(url);
-                const data = await res.json();
-                if (data.code === 'Ok') {
-                    console.log(`Distance matrix: using OSRM profile "${profile}"`);
-                    return { durations: data.durations, distances: data.distances };
-                }
-                console.warn(`OSRM table "${profile}" failed: ${data.code}`);
+                return await brouterDistanceMatrix(stops);
             } catch (err) {
-                console.warn(`OSRM table "${profile}" error:`, err);
+                console.warn('BRouter matrix failed, trying OSRM fallback:', err);
             }
         }
 
-        // All OSRM profiles failed — use Haversine approximation
-        console.warn('All OSRM table requests failed, using Haversine fallback');
+        // OSRM for driving (or as fallback)
+        const coords = stops.map(s => `${s.lng},${s.lat}`).join(';');
+        try {
+            const url = `https://router.project-osrm.org/table/v1/driving/${coords}?annotations=duration,distance`;
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.code === 'Ok') {
+                console.log('Distance matrix: using OSRM driving');
+                return { durations: data.durations, distances: data.distances };
+            }
+        } catch (err) {
+            console.warn('OSRM table failed:', err);
+        }
+
+        console.warn('All routing services failed, using Haversine fallback');
         return buildHaversineMatrix(stops);
     }
 
-    // --- OSRM Route (with fallback chain) ---
+    // --- Route geometry (BRouter for bike/foot, OSRM for driving) ---
     async function getRoute(stops) {
-        const coords = stops.map(s => `${s.lng},${s.lat}`).join(';');
-
-        for (const profile of osrmProfiles()) {
+        // For cycling/walking: use BRouter
+        if (brouterProfile()) {
             try {
-                const url = `https://router.project-osrm.org/route/v1/${profile}/${coords}?overview=full&geometries=geojson&steps=true`;
+                const profile = brouterProfile();
+                const lonlats = stops.map(s => `${s.lng},${s.lat}`).join('|');
+                const url = `https://brouter.de/brouter?lonlats=${lonlats}&profile=${profile}&alternativeidx=0&format=geojson`;
                 const res = await fetch(url);
+                if (!res.ok) throw new Error(`BRouter HTTP ${res.status}`);
                 const data = await res.json();
-                if (data.code === 'Ok') {
-                    console.log(`Route geometry: using OSRM profile "${profile}"`);
-                    return data.routes[0];
-                }
-                console.warn(`OSRM route "${profile}" failed: ${data.code}`);
+                const feat = data.features[0];
+                console.log(`Route geometry: using BRouter profile "${profile}"`);
+                // Return in OSRM-compatible format
+                return {
+                    geometry: feat.geometry,
+                    distance: parseFloat(feat.properties['track-length']),
+                    duration: parseFloat(feat.properties['total-time']),
+                };
             } catch (err) {
-                console.warn(`OSRM route "${profile}" error:`, err);
+                console.warn('BRouter route failed, trying OSRM fallback:', err);
             }
         }
 
-        throw new Error('Kon geen route berekenen. Controleer je internetverbinding.');
+        // OSRM for driving (or as fallback)
+        const coords = stops.map(s => `${s.lng},${s.lat}`).join(';');
+        const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=true`;
+        const res = await fetch(url);
+        const data = await res.json();
+        if (data.code !== 'Ok') {
+            throw new Error('Kon geen route berekenen. Controleer je internetverbinding.');
+        }
+        console.log('Route geometry: using OSRM driving');
+        return data.routes[0];
     }
 
     // ================================================================
