@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Route Optimizer</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <div id="app">
+        <aside id="sidebar">
+            <div class="sidebar-header">
+                <h1>Route Optimizer</h1>
+                <p class="subtitle">Optimaliseer je route met meerdere stops</p>
+            </div>
+
+            <div class="search-section">
+                <div class="search-wrapper">
+                    <input type="text" id="address-input" placeholder="Voeg adres toe..." autocomplete="off" />
+                    <button id="add-address-btn" title="Voeg toe">+</button>
+                </div>
+                <ul id="suggestions" class="suggestions-list"></ul>
+            </div>
+
+            <div class="import-section">
+                <button id="import-btn" class="btn-secondary">Importeer adressen</button>
+                <div id="import-modal" class="modal hidden">
+                    <div class="modal-content">
+                        <h3>Importeer adressen</h3>
+                        <p>Eén adres per regel:</p>
+                        <textarea id="import-textarea" rows="8" placeholder="Damrak 1, Amsterdam&#10;Markt 1, Breda&#10;Stationsplein 1, Utrecht"></textarea>
+                        <div class="modal-actions">
+                            <button id="import-cancel" class="btn-secondary">Annuleren</button>
+                            <button id="import-confirm" class="btn-primary">Importeren</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="stops-section">
+                <div class="stops-header">
+                    <h2>Stops <span id="stop-count">(0)</span></h2>
+                    <button id="clear-all-btn" class="btn-text" title="Verwijder alles">Wis alles</button>
+                </div>
+                <ul id="stops-list" class="stops-list">
+                    <li class="empty-state">Klik op de kaart of zoek een adres om stops toe te voegen</li>
+                </ul>
+            </div>
+
+            <div class="actions-section">
+                <button id="optimize-btn" class="btn-primary btn-large" disabled>
+                    <span class="btn-icon">⟳</span> Optimaliseer route
+                </button>
+                <button id="reverse-btn" class="btn-secondary" disabled>Route omkeren</button>
+            </div>
+
+            <div id="route-summary" class="route-summary hidden">
+                <h2>Route samenvatting</h2>
+                <div class="summary-stats">
+                    <div class="stat">
+                        <span class="stat-label">Totale afstand</span>
+                        <span id="total-distance" class="stat-value">-</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Geschatte tijd</span>
+                        <span id="total-time" class="stat-value">-</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Aantal stops</span>
+                        <span id="total-stops" class="stat-value">-</span>
+                    </div>
+                </div>
+                <div id="route-steps" class="route-steps"></div>
+            </div>
+        </aside>
+
+        <div id="map"></div>
+    </div>
+
+    <div id="loading-overlay" class="hidden">
+        <div class="spinner"></div>
+        <p>Route wordt berekend...</p>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
