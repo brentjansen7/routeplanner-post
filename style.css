@@ -304,6 +304,74 @@ body {
     user-select: none;
 }
 
+/* Options section */
+.options-section {
+    padding: 12px 24px 0;
+}
+
+.option-group {
+    margin-bottom: 10px;
+}
+
+.option-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+}
+
+.toggle-group {
+    display: flex;
+    gap: 0;
+    border: 1px solid #d0d8f0;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.toggle-btn {
+    flex: 1;
+    padding: 8px 12px;
+    border: none;
+    background: #f8f9fc;
+    color: #6b7280;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.toggle-btn:not(:last-child) {
+    border-right: 1px solid #d0d8f0;
+}
+
+.toggle-btn.active {
+    background: #4361ee;
+    color: white;
+}
+
+.toggle-btn:hover:not(.active) {
+    background: #e0e8ff;
+}
+
+.option-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    cursor: pointer;
+    padding: 6px 0;
+}
+
+.option-check input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: #4361ee;
+    cursor: pointer;
+}
+
 /* Actions */
 .actions-section {
     padding: 12px 24px;

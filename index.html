@@ -48,6 +48,22 @@
                 </ul>
             </div>
 
+            <div class="options-section">
+                <div class="option-group">
+                    <label class="option-label">Vervoersmiddel</label>
+                    <div class="toggle-group">
+                        <button id="mode-car" class="toggle-btn active" data-mode="driving" title="Auto">&#128663; Auto</button>
+                        <button id="mode-bike" class="toggle-btn" data-mode="cycling" title="Fiets">&#128690; Fiets</button>
+                    </div>
+                </div>
+                <div class="option-group">
+                    <label class="option-check">
+                        <input type="checkbox" id="round-trip" />
+                        <span>Rondje (start = eind)</span>
+                    </label>
+                </div>
+            </div>
+
             <div class="actions-section">
                 <button id="optimize-btn" class="btn-primary btn-large" disabled>
                     <span class="btn-icon">⟳</span> Optimaliseer route

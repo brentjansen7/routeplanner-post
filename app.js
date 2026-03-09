@@ -12,6 +12,8 @@
         routeLine: null,
         optimized: false,
         nextId: 1,
+        travelMode: 'driving',  // 'driving' or 'cycling'
+        roundTrip: false,
     };
 
     // --- Map setup ---
@@ -44,6 +46,9 @@
     const totalStops = document.getElementById('total-stops');
     const routeSteps = document.getElementById('route-steps');
     const loadingOverlay = document.getElementById('loading-overlay');
+    const modeCarBtn = document.getElementById('mode-car');
+    const modeBikeBtn = document.getElementById('mode-bike');
+    const roundTripCheckbox = document.getElementById('round-trip');
 
     // --- Marker creation ---
     function createNumberedIcon(number, total) {
@@ -282,7 +287,8 @@
     // --- OSRM Distance Matrix ---
     async function getDistanceMatrix(stops) {
         const coords = stops.map(s => `${s.lng},${s.lat}`).join(';');
-        const url = `https://router.project-osrm.org/table/v1/driving/${coords}?annotations=duration,distance`;
+        const profile = state.travelMode === 'cycling' ? 'bike' : 'car';
+        const url = `https://router.project-osrm.org/table/v1/${state.travelMode}/${coords}?annotations=duration,distance`;
         const res = await fetch(url);
         const data = await res.json();
 
@@ -299,7 +305,7 @@
     // --- OSRM Route ---
     async function getRoute(stops) {
         const coords = stops.map(s => `${s.lng},${s.lat}`).join(';');
-        const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=true`;
+        const url = `https://router.project-osrm.org/route/v1/${state.travelMode}/${coords}?overview=full&geometries=geojson&steps=true`;
         const res = await fetch(url);
         const data = await res.json();
 
@@ -396,8 +402,14 @@
             updateMarkerIcons();
             renderStopsList();
 
+            // Build waypoints for route (add first stop at end for round trip)
+            let routeStops = [...state.stops];
+            if (state.roundTrip && state.stops.length >= 2) {
+                routeStops.push({ ...state.stops[0] });
+            }
+
             // Get actual route geometry
-            const route = await getRoute(state.stops);
+            const route = await getRoute(routeStops);
 
             drawRoute(route);
             showRouteSummary(route, matrix, optimalOrder);
@@ -472,6 +484,23 @@
             `;
             routeSteps.appendChild(div);
         });
+
+        // Add return step for round trip
+        if (state.roundTrip && state.stops.length >= 2) {
+            const lastIdx = order[order.length - 1];
+            const firstIdx = order[0];
+            const segDist = (matrix.distances[lastIdx][firstIdx] / 1000).toFixed(1);
+            const segDur = Math.round(matrix.durations[lastIdx][firstIdx] / 60);
+
+            const div = document.createElement('div');
+            div.className = 'route-step';
+            div.innerHTML = `
+                <span class="step-number">&#8634;</span>
+                <span class="step-info">Terug naar: ${escapeHtml(state.stops[0].name)}</span>
+                <span class="step-distance">${segDist} km / ${segDur} min</span>
+            `;
+            routeSteps.appendChild(div);
+        }
 
         routeSummary.classList.remove('hidden');
     }
@@ -551,6 +580,23 @@
         const { lat, lng } = e.latlng;
         const name = await reverseGeocode(lat, lng) || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
         addMarker(lat, lng, name);
+    });
+
+    // Travel mode toggle
+    [modeCarBtn, modeBikeBtn].forEach(btn => {
+        btn.addEventListener('click', () => {
+            modeCarBtn.classList.remove('active');
+            modeBikeBtn.classList.remove('active');
+            btn.classList.add('active');
+            state.travelMode = btn.dataset.mode;
+            clearRoute();
+        });
+    });
+
+    // Round trip toggle
+    roundTripCheckbox.addEventListener('change', () => {
+        state.roundTrip = roundTripCheckbox.checked;
+        clearRoute();
     });
 
     // Optimize
