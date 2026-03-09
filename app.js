@@ -353,54 +353,102 @@
         return data.routes[0];
     }
 
-    // --- TSP Solver (Multi-start Nearest Neighbor + 2-opt + Or-opt) ---
+    // ================================================================
+    // TSP Solver — Production-grade route optimizer
+    // Brute-force for ≤8 stops, multi-start NN + 2-opt + or-opt +
+    // double-bridge perturbation for larger sets. Handles both open
+    // and round-trip routes correctly.
+    // ================================================================
 
-    function totalRouteDistance(order, dist) {
-        let total = 0;
-        for (let i = 0; i < order.length - 1; i++) {
-            total += dist[order[i]][order[i + 1]];
-        }
-        if (state.roundTrip) {
-            total += dist[order[order.length - 1]][order[0]];
-        }
-        return total;
+    // --- Cost helpers ---
+
+    function routeCost(order, dist, round) {
+        let c = 0;
+        for (let i = 0; i < order.length - 1; i++) c += dist[order[i]][order[i + 1]];
+        if (round) c += dist[order[order.length - 1]][order[0]];
+        return c;
     }
+
+    // Edge cost between consecutive stops, handling open-route tail
+    function edge(order, idx, dist, n, round) {
+        if (idx === n - 1) return round ? dist[order[n - 1]][order[0]] : 0;
+        return dist[order[idx]][order[idx + 1]];
+    }
+
+    // --- Brute-force for small n (≤ 8) ---
+
+    function bruteForce(dist, n, round) {
+        // Fix node 0 as start, permute the rest
+        const rest = [];
+        for (let i = 1; i < n; i++) rest.push(i);
+
+        let bestCost = Infinity;
+        let bestOrder = null;
+
+        function permute(arr, l) {
+            if (l === arr.length) {
+                const order = [0, ...arr];
+                const c = routeCost(order, dist, round);
+                if (c < bestCost) {
+                    bestCost = c;
+                    bestOrder = [...order];
+                }
+                return;
+            }
+            for (let i = l; i < arr.length; i++) {
+                [arr[l], arr[i]] = [arr[i], arr[l]];
+                permute(arr, l + 1);
+                [arr[l], arr[i]] = [arr[i], arr[l]];
+            }
+        }
+
+        permute(rest, 0);
+        return bestOrder;
+    }
+
+    // --- Nearest Neighbor heuristic ---
 
     function nearestNeighbor(dist, n, startIdx) {
         const visited = new Set([startIdx]);
         const order = [startIdx];
         while (visited.size < n) {
-            const current = order[order.length - 1];
-            let nearestDist = Infinity;
-            let nearest = -1;
+            const cur = order[order.length - 1];
+            let best = -1, bestD = Infinity;
             for (let i = 0; i < n; i++) {
-                if (!visited.has(i) && dist[current][i] < nearestDist) {
-                    nearestDist = dist[current][i];
-                    nearest = i;
+                if (!visited.has(i) && dist[cur][i] < bestD) {
+                    bestD = dist[cur][i];
+                    best = i;
                 }
             }
-            visited.add(nearest);
-            order.push(nearest);
+            visited.add(best);
+            order.push(best);
         }
         return order;
     }
 
-    function improve2Opt(order, dist) {
+    // --- 2-opt (handles both open and round-trip correctly) ---
+
+    function improve2Opt(order, dist, round) {
         const n = order.length;
-        const isRound = state.roundTrip;
         let improved = true;
         while (improved) {
             improved = false;
+            // i = 1 keeps node 0 fixed as start
             for (let i = 1; i < n - 1; i++) {
                 for (let j = i + 1; j < n; j++) {
-                    // Skip reversing segment that includes fixed endpoints for non-round trips
-                    if (!isRound && j === n - 1) continue;
-                    const a = order[i - 1], b = order[i];
-                    const c = order[j], d = (j + 1 < n) ? order[j + 1] : (isRound ? order[0] : null);
-                    if (d === null) continue;
-                    const before = dist[a][b] + dist[c][d];
-                    const after = dist[a][c] + dist[b][d];
-                    if (after - before < -0.001) {
+                    let delta;
+                    if (j === n - 1 && !round) {
+                        // Open route, reversing tail: only one edge changes
+                        // Before: edge(i-1 -> i)  After: edge(i-1 -> j)
+                        delta = dist[order[i - 1]][order[j]] - dist[order[i - 1]][order[i]];
+                    } else {
+                        // Standard 2-opt: two edges change
+                        const nextJ = (j + 1 < n) ? order[j + 1] : order[0]; // wraps for round trip
+                        const before = dist[order[i - 1]][order[i]] + dist[order[j]][nextJ];
+                        const after = dist[order[i - 1]][order[j]] + dist[order[i]][nextJ];
+                        delta = after - before;
+                    }
+                    if (delta < -0.5) {
                         // Reverse segment [i..j]
                         let lo = i, hi = j;
                         while (lo < hi) {
@@ -414,36 +462,45 @@
         }
     }
 
-    function improveOrOpt(order, dist) {
+    // --- Or-opt: relocate segments of length 1, 2, 3 ---
+
+    function improveOrOpt(order, dist, round) {
         const n = order.length;
-        const isRound = state.roundTrip;
         let improved = true;
         while (improved) {
             improved = false;
-            // Try relocating segments of length 1, 2, 3
             for (let segLen = 1; segLen <= Math.min(3, n - 2); segLen++) {
-                for (let i = 1; i < n - segLen; i++) {
-                    // Cost of removing segment [i..i+segLen-1]
-                    const prevNode = order[i - 1];
-                    const segStart = order[i];
-                    const segEnd = order[i + segLen - 1];
-                    const nextIdx = i + segLen;
-                    const nextNode = (nextIdx < n) ? order[nextIdx] : (isRound ? order[0] : null);
-                    if (nextNode === null) continue;
+                for (let i = 1; i < n; i++) {
+                    if (i + segLen > n) continue;
+                    const endI = i + segLen - 1;
 
-                    const removeCost = dist[prevNode][segStart] + dist[segEnd][nextNode];
-                    const bridgeCost = dist[prevNode][nextNode];
+                    // Nodes around the removed segment
+                    const prev = order[i - 1];
+                    const segFirst = order[i];
+                    const segLast = order[endI];
+                    const hasNext = (endI + 1 < n);
+                    const next = hasNext ? order[endI + 1] : (round ? order[0] : null);
 
-                    // Try inserting segment at each other position
-                    for (let j = 0; j < n - 1; j++) {
-                        if (j >= i - 1 && j < i + segLen) continue; // skip overlap
-                        const jA = order[j], jB = order[j + 1];
-                        const insertCost = dist[jA][segStart] + dist[segEnd][jB];
-                        const currentEdgeCost = dist[jA][jB];
+                    // Cost of the two/one edges being removed by extraction
+                    const removeCost = dist[prev][segFirst]
+                        + (next !== null ? dist[segLast][next] : 0);
+                    // Cost of the bridge after removal
+                    const bridgeCost = (next !== null) ? dist[prev][next] : 0;
+                    const removalGain = removeCost - bridgeCost;
 
-                        const delta = (bridgeCost + insertCost) - (removeCost + currentEdgeCost);
-                        if (delta < -0.001) {
-                            // Perform the move: extract segment and insert after position j
+                    // Try every insertion position (edge between j and j+1)
+                    for (let j = 0; j < n; j++) {
+                        // Skip positions that overlap with the segment
+                        if (j >= i - 1 && j <= endI) continue;
+
+                        const jNext = (j + 1 < n) ? order[j + 1] : (round ? order[0] : null);
+                        if (jNext === null) continue;
+
+                        const insertCost = dist[order[j]][segFirst] + dist[segLast][jNext]
+                            - dist[order[j]][jNext];
+
+                        if (insertCost - removalGain < -0.5) {
+                            // Perform move
                             const segment = order.splice(i, segLen);
                             const insertPos = j < i ? j + 1 : j + 1 - segLen;
                             order.splice(insertPos, 0, ...segment);
@@ -458,46 +515,107 @@
         }
     }
 
+    // --- Full local search: alternate 2-opt and or-opt until no improvement ---
+
+    function localSearch(order, dist, round) {
+        let prevCost = routeCost(order, dist, round);
+        for (let iter = 0; iter < 20; iter++) {
+            improve2Opt(order, dist, round);
+            improveOrOpt(order, dist, round);
+            const newCost = routeCost(order, dist, round);
+            if (prevCost - newCost < 0.5) break;
+            prevCost = newCost;
+        }
+    }
+
+    // --- Double-bridge perturbation (breaks out of local optima) ---
+
+    function doubleBridge(order) {
+        const n = order.length;
+        if (n < 6) return [...order];
+
+        // Pick 3 random cut points (keeping node 0 fixed)
+        const cuts = [];
+        while (cuts.length < 3) {
+            const c = 1 + Math.floor(Math.random() * (n - 2));
+            if (!cuts.includes(c)) cuts.push(c);
+        }
+        cuts.sort((a, b) => a - b);
+
+        const seg1 = order.slice(0, cuts[0]);
+        const seg2 = order.slice(cuts[0], cuts[1]);
+        const seg3 = order.slice(cuts[1], cuts[2]);
+        const seg4 = order.slice(cuts[2]);
+
+        // Reconnect in a different order: seg1 + seg3 + seg2 + seg4
+        return [...seg1, ...seg3, ...seg2, ...seg4];
+    }
+
+    // --- Main solver ---
+
     function solveTSP(distanceMatrix) {
         const n = distanceMatrix.length;
-        if (n <= 2) return Array.from({ length: n }, (_, i) => i);
-        if (n === 3) {
-            // Only 3 stops: try all permutations starting from 0
-            const perms = [[0,1,2],[0,2,1]];
-            let bestDist = Infinity, bestOrder = perms[0];
-            for (const p of perms) {
-                const d = totalRouteDistance(p, distanceMatrix);
-                if (d < bestDist) { bestDist = d; bestOrder = p; }
-            }
-            return bestOrder;
+        const round = state.roundTrip;
+
+        if (n <= 1) return [0];
+        if (n === 2) return [0, 1];
+
+        // Brute-force for small inputs — guarantees optimal result
+        if (n <= 8) {
+            return bruteForce(distanceMatrix, n, round);
         }
 
-        // Multi-start: try nearest neighbor from every starting node
-        let bestOrder = null;
-        let bestDist = Infinity;
+        // --- Larger inputs: multi-start NN + local search + perturbation ---
 
-        // For large inputs, limit starts to save time
-        const maxStarts = Math.min(n, 10);
-        for (let start = 0; start < maxStarts; start++) {
+        let globalBest = null;
+        let globalBestCost = Infinity;
+
+        // Phase 1: Multi-start nearest neighbor from every node
+        for (let start = 0; start < n; start++) {
             const order = nearestNeighbor(distanceMatrix, n, start);
+            localSearch(order, distanceMatrix, round);
 
-            // Apply 2-opt
-            improve2Opt(order, distanceMatrix);
-
-            // Apply or-opt
-            improveOrOpt(order, distanceMatrix);
-
-            // Apply 2-opt again after or-opt moves
-            improve2Opt(order, distanceMatrix);
-
-            const dist = totalRouteDistance(order, distanceMatrix);
-            if (dist < bestDist) {
-                bestDist = dist;
-                bestOrder = [...order];
+            const cost = routeCost(order, distanceMatrix, round);
+            if (cost < globalBestCost) {
+                globalBestCost = cost;
+                globalBest = [...order];
             }
         }
 
-        return bestOrder;
+        // Phase 2: Perturbation — double-bridge kicks to escape local optima
+        // Run more kicks for medium-sized inputs, fewer for large
+        const kicks = n <= 20 ? 50 : (n <= 40 ? 30 : 15);
+        for (let k = 0; k < kicks; k++) {
+            let order = doubleBridge([...globalBest]);
+            localSearch(order, distanceMatrix, round);
+            const cost = routeCost(order, distanceMatrix, round);
+            if (cost < globalBestCost) {
+                globalBestCost = cost;
+                globalBest = [...order];
+            }
+        }
+
+        // Phase 3: Normalize — rotate best solution so that original index 0 is first
+        // This keeps the user's first-added stop as the start
+        const idx0 = globalBest.indexOf(0);
+        if (idx0 > 0) {
+            if (round) {
+                // For round trip, rotate freely
+                globalBest = [...globalBest.slice(idx0), ...globalBest.slice(0, idx0)];
+            } else {
+                // For open route, the start was already fixed by NN (index 0)
+                // but double-bridge may have moved it. Re-run local search with 0 fixed.
+                if (globalBest[0] !== 0) {
+                    // Move 0 back to front and re-optimize
+                    const pos = globalBest.indexOf(0);
+                    globalBest.splice(pos, 1);
+                    globalBest.unshift(0);
+                    localSearch(globalBest, distanceMatrix, round);
+                }
+            }
+        }
+
+        return globalBest;
     }
 
     // --- Route optimization ---
