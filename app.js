@@ -12,7 +12,7 @@
         routeLine: null,
         optimized: false,
         nextId: 1,
-        travelMode: 'driving',  // 'driving' or 'cycling'
+        travelMode: 'driving',  // 'driving', 'cycling', or 'foot'
         roundTrip: false,
     };
 
@@ -48,6 +48,7 @@
     const loadingOverlay = document.getElementById('loading-overlay');
     const modeCarBtn = document.getElementById('mode-car');
     const modeBikeBtn = document.getElementById('mode-bike');
+    const modeWalkBtn = document.getElementById('mode-walk');
     const roundTripCheckbox = document.getElementById('round-trip');
 
     // --- Marker creation ---
@@ -284,11 +285,16 @@
         }
     }
 
+    // --- OSRM profile mapping ---
+    function osrmProfile() {
+        // OSRM demo server profiles: driving, cycling (not "bike"), foot (not "walking")
+        return state.travelMode; // 'driving', 'cycling', or 'foot'
+    }
+
     // --- OSRM Distance Matrix ---
     async function getDistanceMatrix(stops) {
         const coords = stops.map(s => `${s.lng},${s.lat}`).join(';');
-        const profile = state.travelMode === 'cycling' ? 'bike' : 'car';
-        const url = `https://router.project-osrm.org/table/v1/${state.travelMode}/${coords}?annotations=duration,distance`;
+        const url = `https://router.project-osrm.org/table/v1/${osrmProfile()}/${coords}?annotations=duration,distance`;
         const res = await fetch(url);
         const data = await res.json();
 
@@ -305,7 +311,7 @@
     // --- OSRM Route ---
     async function getRoute(stops) {
         const coords = stops.map(s => `${s.lng},${s.lat}`).join(';');
-        const url = `https://router.project-osrm.org/route/v1/${state.travelMode}/${coords}?overview=full&geometries=geojson&steps=true`;
+        const url = `https://router.project-osrm.org/route/v1/${osrmProfile()}/${coords}?overview=full&geometries=geojson&steps=true`;
         const res = await fetch(url);
         const data = await res.json();
 
@@ -316,70 +322,151 @@
         return data.routes[0];
     }
 
-    // --- TSP Solver (Nearest Neighbor + 2-opt) ---
-    function solveTSP(distanceMatrix) {
-        const n = distanceMatrix.length;
-        if (n <= 2) return Array.from({ length: n }, (_, i) => i);
+    // --- TSP Solver (Multi-start Nearest Neighbor + 2-opt + Or-opt) ---
 
-        // Nearest neighbor starting from index 0
-        const visited = new Set([0]);
-        const order = [0];
+    function totalRouteDistance(order, dist) {
+        let total = 0;
+        for (let i = 0; i < order.length - 1; i++) {
+            total += dist[order[i]][order[i + 1]];
+        }
+        if (state.roundTrip) {
+            total += dist[order[order.length - 1]][order[0]];
+        }
+        return total;
+    }
 
+    function nearestNeighbor(dist, n, startIdx) {
+        const visited = new Set([startIdx]);
+        const order = [startIdx];
         while (visited.size < n) {
             const current = order[order.length - 1];
             let nearestDist = Infinity;
             let nearest = -1;
-
             for (let i = 0; i < n; i++) {
-                if (!visited.has(i) && distanceMatrix[current][i] < nearestDist) {
-                    nearestDist = distanceMatrix[current][i];
+                if (!visited.has(i) && dist[current][i] < nearestDist) {
+                    nearestDist = dist[current][i];
                     nearest = i;
                 }
             }
-
             visited.add(nearest);
             order.push(nearest);
         }
+        return order;
+    }
 
-        // 2-opt improvement
+    function improve2Opt(order, dist) {
+        const n = order.length;
+        const isRound = state.roundTrip;
         let improved = true;
         while (improved) {
             improved = false;
             for (let i = 1; i < n - 1; i++) {
                 for (let j = i + 1; j < n; j++) {
-                    const delta = calculateSwapDelta(order, distanceMatrix, i, j);
-                    if (delta < -0.001) {
-                        reverseSegment(order, i, j);
+                    // Skip reversing segment that includes fixed endpoints for non-round trips
+                    if (!isRound && j === n - 1) continue;
+                    const a = order[i - 1], b = order[i];
+                    const c = order[j], d = (j + 1 < n) ? order[j + 1] : (isRound ? order[0] : null);
+                    if (d === null) continue;
+                    const before = dist[a][b] + dist[c][d];
+                    const after = dist[a][c] + dist[b][d];
+                    if (after - before < -0.001) {
+                        // Reverse segment [i..j]
+                        let lo = i, hi = j;
+                        while (lo < hi) {
+                            [order[lo], order[hi]] = [order[hi], order[lo]];
+                            lo++; hi--;
+                        }
                         improved = true;
                     }
                 }
             }
         }
-
-        return order;
     }
 
-    function calculateSwapDelta(order, dist, i, j) {
-        const a = order[i - 1], b = order[i], c = order[j], d = order[j + 1] !== undefined ? order[j + 1] : order[0];
-        const before = dist[a][b] + dist[c][d];
-        const after = dist[a][c] + dist[b][d];
-        return after - before;
-    }
+    function improveOrOpt(order, dist) {
+        const n = order.length;
+        const isRound = state.roundTrip;
+        let improved = true;
+        while (improved) {
+            improved = false;
+            // Try relocating segments of length 1, 2, 3
+            for (let segLen = 1; segLen <= Math.min(3, n - 2); segLen++) {
+                for (let i = 1; i < n - segLen; i++) {
+                    // Cost of removing segment [i..i+segLen-1]
+                    const prevNode = order[i - 1];
+                    const segStart = order[i];
+                    const segEnd = order[i + segLen - 1];
+                    const nextIdx = i + segLen;
+                    const nextNode = (nextIdx < n) ? order[nextIdx] : (isRound ? order[0] : null);
+                    if (nextNode === null) continue;
 
-    function reverseSegment(arr, i, j) {
-        while (i < j) {
-            [arr[i], arr[j]] = [arr[j], arr[i]];
-            i++;
-            j--;
+                    const removeCost = dist[prevNode][segStart] + dist[segEnd][nextNode];
+                    const bridgeCost = dist[prevNode][nextNode];
+
+                    // Try inserting segment at each other position
+                    for (let j = 0; j < n - 1; j++) {
+                        if (j >= i - 1 && j < i + segLen) continue; // skip overlap
+                        const jA = order[j], jB = order[j + 1];
+                        const insertCost = dist[jA][segStart] + dist[segEnd][jB];
+                        const currentEdgeCost = dist[jA][jB];
+
+                        const delta = (bridgeCost + insertCost) - (removeCost + currentEdgeCost);
+                        if (delta < -0.001) {
+                            // Perform the move: extract segment and insert after position j
+                            const segment = order.splice(i, segLen);
+                            const insertPos = j < i ? j + 1 : j + 1 - segLen;
+                            order.splice(insertPos, 0, ...segment);
+                            improved = true;
+                            break;
+                        }
+                    }
+                    if (improved) break;
+                }
+                if (improved) break;
+            }
         }
     }
 
-    function totalRouteDistance(order, distanceMatrix) {
-        let total = 0;
-        for (let i = 0; i < order.length - 1; i++) {
-            total += distanceMatrix[order[i]][order[i + 1]];
+    function solveTSP(distanceMatrix) {
+        const n = distanceMatrix.length;
+        if (n <= 2) return Array.from({ length: n }, (_, i) => i);
+        if (n === 3) {
+            // Only 3 stops: try all permutations starting from 0
+            const perms = [[0,1,2],[0,2,1]];
+            let bestDist = Infinity, bestOrder = perms[0];
+            for (const p of perms) {
+                const d = totalRouteDistance(p, distanceMatrix);
+                if (d < bestDist) { bestDist = d; bestOrder = p; }
+            }
+            return bestOrder;
         }
-        return total;
+
+        // Multi-start: try nearest neighbor from every starting node
+        let bestOrder = null;
+        let bestDist = Infinity;
+
+        // For large inputs, limit starts to save time
+        const maxStarts = Math.min(n, 10);
+        for (let start = 0; start < maxStarts; start++) {
+            const order = nearestNeighbor(distanceMatrix, n, start);
+
+            // Apply 2-opt
+            improve2Opt(order, distanceMatrix);
+
+            // Apply or-opt
+            improveOrOpt(order, distanceMatrix);
+
+            // Apply 2-opt again after or-opt moves
+            improve2Opt(order, distanceMatrix);
+
+            const dist = totalRouteDistance(order, distanceMatrix);
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestOrder = [...order];
+            }
+        }
+
+        return bestOrder;
     }
 
     // --- Route optimization ---
@@ -583,10 +670,10 @@
     });
 
     // Travel mode toggle
-    [modeCarBtn, modeBikeBtn].forEach(btn => {
+    const modeBtns = [modeCarBtn, modeBikeBtn, modeWalkBtn];
+    modeBtns.forEach(btn => {
         btn.addEventListener('click', () => {
-            modeCarBtn.classList.remove('active');
-            modeBikeBtn.classList.remove('active');
+            modeBtns.forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             state.travelMode = btn.dataset.mode;
             clearRoute();
