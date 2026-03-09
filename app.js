@@ -709,17 +709,69 @@
     }
 
     // --- Route optimization ---
+
+    // Parse Dutch address into street name + house number
+    function parseAddress(name) {
+        // Match patterns like "Lavendel 63", "Vijverlaan 640a", "De Brink 12"
+        const match = name.match(/^(.+?)\s+(\d+)/);
+        if (!match) return null;
+        return {
+            street: match[1].toLowerCase().trim(),
+            number: parseInt(match[2]),
+            isOdd: parseInt(match[2]) % 2 === 1,
+        };
+    }
+
+    // Adjust distance matrix for postal delivery optimization.
+    // In the Netherlands: odd house numbers are on one side of the street,
+    // even numbers on the other. For efficient mail delivery:
+    //  - Same street, same side → very cheap (just walk along the houses)
+    //  - Same street, other side → cheap (cross once at the end)
+    //  - Different street → keep original BRouter distance
+    function adjustMatrixForPostal(matrix, stops) {
+        const n = stops.length;
+        const parsed = stops.map(s => parseAddress(s.name));
+
+        for (let i = 0; i < n; i++) {
+            for (let j = 0; j < n; j++) {
+                if (i === j) continue;
+                const a = parsed[i], b = parsed[j];
+                if (!a || !b || a.street !== b.street) continue;
+
+                if (a.isOdd === b.isOdd) {
+                    // Same street, same side: distance based on house numbers
+                    // ~8m between consecutive house numbers (typical Dutch row houses)
+                    const houseGap = Math.abs(a.number - b.number);
+                    matrix.distances[i][j] = houseGap * 4;    // meters
+                    matrix.durations[i][j] = houseGap * 1.5;  // seconds
+                } else {
+                    // Same street, different side: small crossing penalty
+                    // This ensures the optimizer finishes one side before crossing
+                    matrix.distances[i][j] = 30;   // ~30m to cross a street
+                    matrix.durations[i][j] = 20;   // ~20s to cross
+                }
+            }
+        }
+
+        return matrix;
+    }
+
     async function optimizeRoute() {
         if (state.stops.length < 2) return;
 
         showLoading(true);
 
         try {
-            // Get distance matrix from OSRM
+            // Get distance matrix
             const matrix = await getDistanceMatrix(state.stops);
 
-            // Solve TSP using durations — this prefers main roads over
-            // zigzagging through side streets, producing smoother routes
+            // For cycling/walking: adjust matrix for postal delivery
+            // (group same-street, same-side houses together)
+            if (state.travelMode !== 'driving') {
+                adjustMatrixForPostal(matrix, state.stops);
+            }
+
+            // Solve TSP using durations
             const optimalOrder = solveTSP(matrix.durations);
 
             // Reorder stops
@@ -792,6 +844,7 @@
         state.stops.forEach((stop, i) => {
             const div = document.createElement('div');
             div.className = 'route-step';
+            const addr = parseAddress(stop.name);
 
             let distText = '';
             if (i > 0) {
@@ -804,8 +857,15 @@
                 distText = 'Start';
             }
 
+            // Show street side indicator for postal delivery
+            const sideBadge = addr
+                ? `<span class="step-side ${addr.isOdd ? 'side-odd' : 'side-even'}" title="Huisnummer ${addr.number} — ${addr.isOdd ? 'oneven (links)' : 'even (rechts)'}">` +
+                  `${addr.isOdd ? 'L' : 'R'}</span>`
+                : '';
+
             div.innerHTML = `
                 <span class="step-number">${i + 1}</span>
+                ${sideBadge}
                 <span class="step-info">${escapeHtml(stop.name)}</span>
                 <span class="step-distance">${distText}</span>
             `;
