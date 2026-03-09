@@ -286,45 +286,88 @@
     }
 
     // --- OSRM profile mapping ---
-    // OSRM demo server supports driving, bicycle, and foot profiles.
-    // Each profile uses its own road network: bicycle includes bike paths,
-    // cycle lanes, and side streets; foot includes footpaths, sidewalks,
-    // and pedestrian zones.
-    function osrmProfile() {
-        if (state.travelMode === 'cycling') return 'bicycle';
-        if (state.travelMode === 'foot') return 'foot';
-        return 'driving';
+    // Try the mode-specific profile first, fall back to driving.
+    // OSRM demo server may not support bicycle/foot for all endpoints.
+    function osrmProfiles() {
+        if (state.travelMode === 'cycling') return ['bicycle', 'driving'];
+        if (state.travelMode === 'foot') return ['foot', 'driving'];
+        return ['driving'];
     }
 
-    // --- OSRM Distance Matrix ---
+    // --- Haversine fallback for distance matrix ---
+    function haversineDistance(lat1, lng1, lat2, lng2) {
+        const R = 6371000;
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLng = (lng2 - lng1) * Math.PI / 180;
+        const a = Math.sin(dLat / 2) ** 2
+            + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180)
+            * Math.sin(dLng / 2) ** 2;
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    function buildHaversineMatrix(stops) {
+        const n = stops.length;
+        const distances = Array.from({ length: n }, () => new Array(n).fill(0));
+        const durations = Array.from({ length: n }, () => new Array(n).fill(0));
+        // Average speeds (m/s): cycling ~15km/h, foot ~5km/h, driving ~40km/h
+        const speed = state.travelMode === 'cycling' ? 4.2
+            : state.travelMode === 'foot' ? 1.4 : 11;
+        const roadFactor = 1.35; // roads are ~35% longer than straight-line
+        for (let i = 0; i < n; i++) {
+            for (let j = 0; j < n; j++) {
+                if (i === j) continue;
+                const d = haversineDistance(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng) * roadFactor;
+                distances[i][j] = d;
+                durations[i][j] = d / speed;
+            }
+        }
+        return { distances, durations };
+    }
+
+    // --- OSRM Distance Matrix (with fallback chain) ---
     async function getDistanceMatrix(stops) {
         const coords = stops.map(s => `${s.lng},${s.lat}`).join(';');
-        const url = `https://router.project-osrm.org/table/v1/${osrmProfile()}/${coords}?annotations=duration,distance`;
-        const res = await fetch(url);
-        const data = await res.json();
 
-        if (data.code !== 'Ok') {
-            throw new Error('OSRM table request failed: ' + data.code);
+        for (const profile of osrmProfiles()) {
+            try {
+                const url = `https://router.project-osrm.org/table/v1/${profile}/${coords}?annotations=duration,distance`;
+                const res = await fetch(url);
+                const data = await res.json();
+                if (data.code === 'Ok') {
+                    console.log(`Distance matrix: using OSRM profile "${profile}"`);
+                    return { durations: data.durations, distances: data.distances };
+                }
+                console.warn(`OSRM table "${profile}" failed: ${data.code}`);
+            } catch (err) {
+                console.warn(`OSRM table "${profile}" error:`, err);
+            }
         }
 
-        return {
-            durations: data.durations,
-            distances: data.distances,
-        };
+        // All OSRM profiles failed — use Haversine approximation
+        console.warn('All OSRM table requests failed, using Haversine fallback');
+        return buildHaversineMatrix(stops);
     }
 
-    // --- OSRM Route ---
+    // --- OSRM Route (with fallback chain) ---
     async function getRoute(stops) {
         const coords = stops.map(s => `${s.lng},${s.lat}`).join(';');
-        const url = `https://router.project-osrm.org/route/v1/${osrmProfile()}/${coords}?overview=full&geometries=geojson&steps=true`;
-        const res = await fetch(url);
-        const data = await res.json();
 
-        if (data.code !== 'Ok') {
-            throw new Error('OSRM route request failed: ' + data.code);
+        for (const profile of osrmProfiles()) {
+            try {
+                const url = `https://router.project-osrm.org/route/v1/${profile}/${coords}?overview=full&geometries=geojson&steps=true`;
+                const res = await fetch(url);
+                const data = await res.json();
+                if (data.code === 'Ok') {
+                    console.log(`Route geometry: using OSRM profile "${profile}"`);
+                    return data.routes[0];
+                }
+                console.warn(`OSRM route "${profile}" failed: ${data.code}`);
+            } catch (err) {
+                console.warn(`OSRM route "${profile}" error:`, err);
+            }
         }
 
-        return data.routes[0];
+        throw new Error('Kon geen route berekenen. Controleer je internetverbinding.');
     }
 
     // ================================================================
