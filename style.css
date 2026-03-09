@@ -332,8 +332,9 @@ body {
 }
 
 .toggle-btn {
-    flex: 1;
-    padding: 8px 6px;
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 8px 4px;
     border: none;
     background: #f8f9fc;
     color: #6b7280;
@@ -341,9 +342,7 @@ body {
     font-weight: 500;
     cursor: pointer;
     transition: all 0.2s;
-    white-space: nowrap;
-    position: relative;
-    z-index: 1;
+    text-align: center;
 }
 
 .toggle-btn:not(:last-child) {
