@@ -50,6 +50,7 @@
     const modeBikeBtn = document.getElementById('mode-bike');
     const modeWalkBtn = document.getElementById('mode-walk');
     const roundTripCheckbox = document.getElementById('round-trip');
+    const copyRouteBtn = document.getElementById('copy-route-btn');
 
     // --- Marker creation ---
     function createNumberedIcon(number, total) {
@@ -300,9 +301,17 @@
     // BRouter uses OpenStreetMap data and supports footpaths, bike paths,
     // side streets, and pedestrian zones that OSRM driving ignores.
     function brouterProfile() {
-        if (state.travelMode === 'cycling') return 'trekking';
-        if (state.travelMode === 'foot') return 'shortest';
+        // Both cycling and walking use the same 'trekking' profile.
+        // This ensures identical route geometry (same side streets, paths)
+        // for both modes — only the speed/duration estimate differs.
+        if (state.travelMode === 'cycling' || state.travelMode === 'foot') return 'trekking';
         return null;
+    }
+
+    // Walking uses same route as cycling but at walking speed (~5 km/h vs ~15 km/h)
+    function adjustDurationForMode(duration) {
+        if (state.travelMode === 'foot') return duration * 3; // ~15km/h → ~5km/h
+        return duration;
     }
 
     // Get route between two points via BRouter (returns {distance, duration})
@@ -315,7 +324,7 @@
         const feat = data.features[0];
         return {
             distance: parseFloat(feat.properties['track-length']),
-            duration: parseFloat(feat.properties['total-time']),
+            duration: adjustDurationForMode(parseFloat(feat.properties['total-time'])),
         };
     }
 
@@ -416,7 +425,7 @@
                 return {
                     geometry: feat.geometry,
                     distance: parseFloat(feat.properties['track-length']),
-                    duration: parseFloat(feat.properties['total-time']),
+                    duration: adjustDurationForMode(parseFloat(feat.properties['total-time'])),
                 };
             } catch (err) {
                 console.warn('BRouter route failed, trying OSRM fallback:', err);
@@ -939,6 +948,21 @@
         renderStopsList();
         updateButtons();
         clearRoute();
+    });
+
+    // Copy route list
+    copyRouteBtn.addEventListener('click', () => {
+        if (state.stops.length === 0) return;
+        const lines = state.stops.map((stop, i) => `${i + 1}. ${stop.name}`);
+        if (state.roundTrip && state.stops.length >= 2) {
+            lines.push(`${state.stops.length + 1}. ${state.stops[0].name} (terug)`);
+        }
+        const text = lines.join('\n');
+        navigator.clipboard.writeText(text).then(() => {
+            const original = copyRouteBtn.textContent;
+            copyRouteBtn.textContent = '\u2705 Gekopieerd!';
+            setTimeout(() => { copyRouteBtn.textContent = original; }, 2000);
+        });
     });
 
     // Import modal
