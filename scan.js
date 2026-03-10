@@ -28,13 +28,19 @@
     const sendToRouteBtn = document.getElementById('send-to-route-btn');
     const loadingOverlay = document.getElementById('loading-overlay');
     const loadingText = document.getElementById('loading-text');
+    const scanCityInput = document.getElementById('scan-city');
 
-
-    // --- Load saved API key + provider ---
+    // --- Load saved API key + provider + city ---
     const savedKey = localStorage.getItem('scan-api-key');
     const savedProvider = localStorage.getItem('scan-provider');
+    const savedCity = localStorage.getItem('scan-city');
     if (savedKey) apiKeyInput.value = savedKey;
     if (savedProvider) state.provider = savedProvider;
+    if (savedCity) scanCityInput.value = savedCity;
+
+    scanCityInput.addEventListener('input', () => {
+        localStorage.setItem('scan-city', scanCityInput.value.trim());
+    });
 
     // --- Provider toggle ---
     document.querySelectorAll('[data-provider]').forEach(btn => {
@@ -266,6 +272,7 @@
 
     async function scanWithTesseract(dataUrl) {
         const worker = await getWorker();
+        const city = scanCityInput.value.trim();
 
         // Strategieën: elke poging met betere beeldverwerking als vorige mislukt
         const strategies = [
@@ -279,7 +286,7 @@
         for (const strategy of strategies) {
             const processed = await preprocessImage(dataUrl, strategy);
             const { data } = await worker.recognize(processed);
-            const result = parseRecipientAddress(data);
+            const result = parseRecipientAddress(data, city);
             lastResult = result;
             if (hasValidAddress(result)) return result;
         }
@@ -287,20 +294,46 @@
         return lastResult;
     }
 
-    function parseRecipientAddress(data) {
+    function parseRecipientAddress(data, city = '') {
         const postcodeRe = /\b(\d{4})\s*([A-Za-z]{2})\b/;
         const streetRe = /[A-Za-zÀ-ÿ]{3,}.*\d+/;
         const lines = data.lines || [];
+        const cityLower = city.toLowerCase();
 
-        // Vind de postcode-regel die het LAAGST op de afbeelding staat (= ontvanger)
+        // Als er een plaats is ingevuld: zoek de postcode-regel die bij die plaats hoort
+        // Anders: pak de postcode-regel die het LAAGST staat (= ontvanger)
         let recipientLine = null;
         let maxY = -1;
 
         for (const line of lines) {
             const text = line.text.trim();
-            if (postcodeRe.test(text) && line.bbox.y0 > maxY) {
-                maxY = line.bbox.y0;
-                recipientLine = line;
+            if (!postcodeRe.test(text)) continue;
+
+            if (cityLower) {
+                // Kijk of deze regel of de regels rondom de plaatsnaam bevatten
+                const idx = lines.indexOf(line);
+                const context = lines.slice(Math.max(0, idx - 2), idx + 3)
+                    .map(l => l.text.toLowerCase()).join(' ');
+                if (context.includes(cityLower) && line.bbox.y0 > maxY) {
+                    maxY = line.bbox.y0;
+                    recipientLine = line;
+                }
+            } else {
+                if (line.bbox.y0 > maxY) {
+                    maxY = line.bbox.y0;
+                    recipientLine = line;
+                }
+            }
+        }
+
+        // Als plaatsfilter niets oplevert, val terug op laagste postcode
+        if (!recipientLine && cityLower) {
+            for (const line of lines) {
+                const text = line.text.trim();
+                if (postcodeRe.test(text) && line.bbox.y0 > maxY) {
+                    maxY = line.bbox.y0;
+                    recipientLine = line;
+                }
             }
         }
 
@@ -335,7 +368,12 @@
             ? streetLine.text.trim() : '';
 
         const pcText = recipientLine.text.trim();
-        return [street ? `${street}, ${pcText}` : pcText];
+        // Voeg plaatsnaam toe als die niet al in het resultaat zit
+        const fullAddress = street ? `${street}, ${pcText}` : pcText;
+        if (city && !fullAddress.toLowerCase().includes(cityLower)) {
+            return [`${fullAddress} ${city}`];
+        }
+        return [fullAddress];
     }
 
     async function scanWithGemini(base64, mimeType, apiKey) {

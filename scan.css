@@ -11,6 +11,26 @@ body {
     background: #ffffff;
 }
 
+/* City input */
+.city-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.city-section input {
+    padding: 10px 14px;
+    border: 2px solid #e8e8ef;
+    border-radius: 8px;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.city-section input:focus {
+    border-color: #4361ee;
+}
+
 .scan-container {
     display: flex;
     flex-direction: column;
