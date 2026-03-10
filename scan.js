@@ -192,9 +192,15 @@
 
             try {
                 const addresses = await scanPhoto(photo, key);
-                photo.status = 'done';
-                for (const addr of addresses) {
-                    state.addresses.push({ text: addr, photoId: photo.id });
+                const valid = addresses.filter(a => !a.startsWith('Geen adres gevonden'));
+                if (valid.length > 0) {
+                    photo.status = 'done';
+                    for (const addr of valid) {
+                        state.addresses.push({ text: addr, photoId: photo.id });
+                    }
+                } else {
+                    photo.status = 'error';
+                    photo.errorMsg = addresses[0] || 'Geen adres gevonden';
                 }
             } catch (err) {
                 console.error('Scan error:', err);
