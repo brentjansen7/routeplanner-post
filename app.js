@@ -722,38 +722,135 @@
         };
     }
 
-    // Adjust distance matrix for postal delivery optimization.
-    // In the Netherlands: odd house numbers are on one side of the street,
-    // even numbers on the other. For efficient mail delivery:
-    //  - Same street, same side → very cheap (just walk along the houses)
-    //  - Same street, other side → cheap (cross once at the end)
-    //  - Different street → keep original BRouter distance
-    function adjustMatrixForPostal(matrix, stops) {
-        const n = stops.length;
+    // --- Mailbox position detection via Overpass API ---
+    // Queries OpenStreetMap for buildings and nearby paths to determine
+    // whether mailboxes on each street are at the front (street side)
+    // or back (footpath/alley side) of the houses.
+    async function findDeliveryWaypoints(stops) {
         const parsed = stops.map(s => parseAddress(s.name));
 
-        for (let i = 0; i < n; i++) {
-            for (let j = 0; j < n; j++) {
-                if (i === j) continue;
-                const a = parsed[i], b = parsed[j];
-                if (!a || !b || a.street !== b.street) continue;
+        // Bounding box around all stops with ~200m padding
+        const lats = stops.map(s => s.lat);
+        const lngs = stops.map(s => s.lng);
+        const pad = 0.002;
+        const bbox = [
+            Math.min(...lats) - pad, Math.min(...lngs) - pad,
+            Math.max(...lats) + pad, Math.max(...lngs) + pad
+        ].join(',');
 
-                if (a.isOdd === b.isOdd) {
-                    // Same street, same side: distance based on house numbers
-                    // ~8m between consecutive house numbers (typical Dutch row houses)
-                    const houseGap = Math.abs(a.number - b.number);
-                    matrix.distances[i][j] = houseGap * 4;    // meters
-                    matrix.durations[i][j] = houseGap * 1.5;  // seconds
-                } else {
-                    // Same street, different side: small crossing penalty
-                    // This ensures the optimizer finishes one side before crossing
-                    matrix.distances[i][j] = 30;   // ~30m to cross a street
-                    matrix.durations[i][j] = 20;   // ~20s to cross
-                }
+        // Single Overpass query: all buildings + all walkable paths
+        const query = `[out:json][timeout:15];(way["building"](${bbox});way["highway"](${bbox}););out geom;`;
+        const res = await fetch('https://overpass-api.de/api/interpreter', {
+            method: 'POST',
+            body: 'data=' + encodeURIComponent(query)
+        });
+        if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
+        const osm = await res.json();
+
+        const buildings = osm.elements.filter(e => e.tags?.building && e.geometry);
+        const highways = osm.elements.filter(e => e.tags?.highway && e.geometry);
+        const footways = highways.filter(h =>
+            ['footway', 'path', 'pedestrian', 'service', 'cycleway'].includes(h.tags.highway)
+        );
+
+        // Helper: minimum distance from a point to a way's geometry
+        function minDistToWay(lat, lng, way) {
+            let min = Infinity;
+            let closest = null;
+            for (const node of way.geometry) {
+                const d = haversineDistance(lat, lng, node.lat, node.lon);
+                if (d < min) { min = d; closest = node; }
             }
+            return { dist: min, point: closest };
         }
 
-        return matrix;
+        // For each stop: find its building, the named street, and any back path
+        const perStop = stops.map((stop, i) => {
+            const addr = parsed[i];
+            if (!addr) return { lat: stop.lat, lng: stop.lng, side: null };
+
+            // Find nearest building
+            let bestBDist = Infinity, bestBuilding = null;
+            for (const b of buildings) {
+                for (const node of b.geometry) {
+                    const d = haversineDistance(stop.lat, stop.lng, node.lat, node.lon);
+                    if (d < bestBDist) { bestBDist = d; bestBuilding = b; }
+                }
+            }
+            if (!bestBuilding || bestBDist > 40) {
+                return { lat: stop.lat, lng: stop.lng, side: null };
+            }
+
+            // Building centroid
+            const cx = bestBuilding.geometry.reduce((s, n) => s + n.lat, 0) / bestBuilding.geometry.length;
+            const cy = bestBuilding.geometry.reduce((s, n) => s + n.lon, 0) / bestBuilding.geometry.length;
+
+            // Find the named street (matching the address)
+            const namedStreet = highways.find(h =>
+                h.tags?.name && h.tags.name.toLowerCase().includes(addr.street)
+            );
+
+            // Distance from building centroid to named street
+            const toStreet = namedStreet ? minDistToWay(cx, cy, namedStreet) : { dist: Infinity, point: null };
+
+            // Find nearest footway that is NOT the named street
+            let bestFP = { dist: Infinity, point: null, way: null };
+            for (const fp of footways) {
+                if (namedStreet && fp.id === namedStreet.id) continue;
+                const r = minDistToWay(cx, cy, fp);
+                if (r.dist < bestFP.dist) {
+                    bestFP = { ...r, way: fp };
+                }
+            }
+
+            // Decision: if a footpath is significantly closer to the building
+            // than the named street, mailbox is likely on the footpath side (back)
+            if (bestFP.point && bestFP.dist < toStreet.dist * 0.7 && bestFP.dist < 25) {
+                // Snap to the point ON the footpath (not the building!)
+                // so BRouter can route along it
+                return {
+                    lat: bestFP.point.lat, lng: bestFP.point.lon,
+                    side: 'achterkant',
+                    pathType: bestFP.way.tags?.highway || 'pad',
+                };
+            }
+
+            // Otherwise: mailbox at front (named street side)
+            // Keep the original geocoded position — it's already on the street
+            return { lat: stop.lat, lng: stop.lng, side: 'voorkant' };
+        });
+
+        // Per-street majority decision: if most buildings on a street have
+        // mailboxes at the back, apply that to ALL buildings on that street
+        const streetGroups = {};
+        perStop.forEach((wp, i) => {
+            const addr = parsed[i];
+            if (!addr || !wp.side) return;
+            if (!streetGroups[addr.street]) streetGroups[addr.street] = [];
+            streetGroups[addr.street].push(i);
+        });
+
+        for (const [streetName, indices] of Object.entries(streetGroups)) {
+            const back = indices.filter(i => perStop[i].side === 'achterkant').length;
+            const front = indices.filter(i => perStop[i].side === 'voorkant').length;
+            const majority = back > front ? 'achterkant' : 'voorkant';
+
+            // Apply majority decision to all stops on this street
+            for (const i of indices) {
+                perStop[i].streetSide = majority;
+
+                // If majority is "voorkant" but this stop was detected as "achterkant",
+                // revert to original geocoded position (on the main street)
+                if (majority === 'voorkant' && perStop[i].side === 'achterkant') {
+                    perStop[i].lat = stops[i].lat;
+                    perStop[i].lng = stops[i].lng;
+                }
+            }
+
+            console.log(`Straat "${streetName}": brievenbussen aan de ${majority} (${front} voor, ${back} achter)`);
+        }
+
+        return perStop;
     }
 
     async function optimizeRoute() {
@@ -762,36 +859,59 @@
         showLoading(true);
 
         try {
-            // Get distance matrix
-            const matrix = await getDistanceMatrix(state.stops);
-
-            // For cycling/walking: adjust matrix for postal delivery
-            // (group same-street, same-side houses together)
+            // Detect mailbox positions using OpenStreetMap building data
+            let deliveryPoints = null;
             if (state.travelMode !== 'driving') {
-                adjustMatrixForPostal(matrix, state.stops);
+                try {
+                    deliveryPoints = await findDeliveryWaypoints(state.stops);
+                    console.log('Delivery waypoints:', deliveryPoints.map((w, i) =>
+                        `${state.stops[i].name}: ${w.streetSide || w.side || 'onbekend'}`
+                    ));
+                } catch (err) {
+                    console.warn('Mailbox detection failed, using original positions:', err);
+                }
             }
+
+            // Build routing stops: use delivery waypoints if available
+            const routingStops = deliveryPoints
+                ? state.stops.map((s, i) => ({
+                    ...s,
+                    lat: deliveryPoints[i].lat,
+                    lng: deliveryPoints[i].lng,
+                }))
+                : state.stops;
+
+            // Get distance matrix using delivery-side waypoints
+            const matrix = await getDistanceMatrix(routingStops);
 
             // Solve TSP using durations
             const optimalOrder = solveTSP(matrix.durations);
 
-            // Reorder stops
+            // Reorder stops and delivery points together
             const reordered = optimalOrder.map(i => state.stops[i]);
+            const reorderedDP = deliveryPoints
+                ? optimalOrder.map(i => deliveryPoints[i])
+                : null;
             state.stops = reordered;
 
             updateMarkerIcons();
             renderStopsList();
 
-            // Build waypoints for route (add first stop at end for round trip)
-            let routeStops = [...state.stops];
+            // Build waypoints for route using delivery-side positions
+            let routeStops = reorderedDP
+                ? state.stops.map((s, i) => ({
+                    ...s, lat: reorderedDP[i].lat, lng: reorderedDP[i].lng,
+                }))
+                : [...state.stops];
             if (state.roundTrip && state.stops.length >= 2) {
-                routeStops.push({ ...state.stops[0] });
+                routeStops.push({ ...routeStops[0] });
             }
 
             // Get actual route geometry
             const route = await getRoute(routeStops);
 
             drawRoute(route);
-            showRouteSummary(route, matrix, optimalOrder);
+            showRouteSummary(route, matrix, optimalOrder, reorderedDP);
             fitMapToStops();
             state.optimized = true;
         } catch (err) {
@@ -829,7 +949,7 @@
     }
 
     // --- Route summary ---
-    function showRouteSummary(route, matrix, order) {
+    function showRouteSummary(route, matrix, order, deliveryPoints) {
         const distKm = (route.distance / 1000).toFixed(1);
         const durMin = Math.round(route.duration / 60);
         const hours = Math.floor(durMin / 60);
@@ -844,7 +964,6 @@
         state.stops.forEach((stop, i) => {
             const div = document.createElement('div');
             div.className = 'route-step';
-            const addr = parseAddress(stop.name);
 
             let distText = '';
             if (i > 0) {
@@ -857,11 +976,14 @@
                 distText = 'Start';
             }
 
-            // Show street side indicator for postal delivery
-            const sideBadge = addr
-                ? `<span class="step-side ${addr.isOdd ? 'side-odd' : 'side-even'}" title="Huisnummer ${addr.number} — ${addr.isOdd ? 'oneven (links)' : 'even (rechts)'}">` +
-                  `${addr.isOdd ? 'L' : 'R'}</span>`
-                : '';
+            // Show mailbox side indicator (voorkant/achterkant)
+            let sideBadge = '';
+            if (deliveryPoints && deliveryPoints[i] && deliveryPoints[i].streetSide) {
+                const side = deliveryPoints[i].streetSide;
+                const isBack = side === 'achterkant';
+                sideBadge = `<span class="step-side ${isBack ? 'side-back' : 'side-front'}" ` +
+                    `title="Brievenbus aan de ${side}">${isBack ? 'A' : 'V'}</span>`;
+            }
 
             div.innerHTML = `
                 <span class="step-number">${i + 1}</span>
