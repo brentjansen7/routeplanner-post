@@ -266,8 +266,31 @@
     }
 
     function hasValidAddress(addresses) {
+        return addresses.some(isRealisticAddress);
+    }
+
+    // Controleert of een adres er logisch uitziet (geen rommel)
+    function isRealisticAddress(text) {
+        if (!text || text.length < 6) return false;
+
+        // Moet een Nederlandse postcode hebben
         const postcodeRe = /\b\d{4}\s*[A-Za-z]{2}\b/;
-        return addresses.some(a => postcodeRe.test(a));
+        if (!postcodeRe.test(text)) return false;
+
+        // Moet minstens één woord van 3+ letters bevatten (straatnaam)
+        const hasWord = /[A-Za-zÀ-ÿ]{3,}/.test(text);
+        if (!hasWord) return false;
+
+        // Mag niet meer dan 40% speciale tekens zijn (rommel-check)
+        const specialChars = (text.match(/[^A-Za-z0-9À-ÿ\s,.\-]/g) || []).length;
+        if (specialChars / text.length > 0.4) return false;
+
+        // Huisnummer moet een realistisch getal zijn (1–9999)
+        const houseNr = text.match(/\b(\d+)\b/g) || [];
+        const hasRealisticNr = houseNr.some(n => parseInt(n) >= 1 && parseInt(n) <= 9999);
+        if (!hasRealisticNr) return false;
+
+        return true;
     }
 
     async function scanWithTesseract(dataUrl) {
@@ -338,23 +361,6 @@
         }
 
         if (!recipientLine) {
-            // Fallback 1: adres-patroon (straat + huisnummer)
-            const addrPattern = /^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s\-\.\']{2,}\s+\d+/;
-            const matches = lines
-                .filter(l => addrPattern.test(l.text.trim()))
-                .sort((a, b) => b.bbox.y0 - a.bbox.y0);
-            if (matches.length) return [matches[0].text.trim()];
-
-            // Fallback 2: toon alleen leesbare regels (>60% letters/cijfers)
-            const readable = lines
-                .map(l => l.text.trim())
-                .filter(l => {
-                    if (l.length < 4) return false;
-                    const clean = (l.match(/[A-Za-z0-9À-ÿ]/g) || []).length;
-                    return clean / l.length > 0.6;
-                });
-            if (readable.length) return readable;
-
             return ['Geen adres gevonden — maak een dichtere foto van het adres-label'];
         }
 
@@ -370,10 +376,14 @@
         const pcText = recipientLine.text.trim();
         // Voeg plaatsnaam toe als die niet al in het resultaat zit
         const fullAddress = street ? `${street}, ${pcText}` : pcText;
-        if (city && !fullAddress.toLowerCase().includes(cityLower)) {
-            return [`${fullAddress} ${city}`];
+        const finalAddress = (city && !fullAddress.toLowerCase().includes(cityLower))
+            ? `${fullAddress} ${city}` : fullAddress;
+
+        // Eindscheck: geef alleen terug als het er als een echt adres uitziet
+        if (!isRealisticAddress(finalAddress)) {
+            return ['Geen adres gevonden — maak een dichtere foto van het adres-label'];
         }
-        return [fullAddress];
+        return [finalAddress];
     }
 
     async function scanWithGemini(base64, mimeType, apiKey) {
