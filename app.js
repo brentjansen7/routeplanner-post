@@ -1199,4 +1199,20 @@
         }
     });
 
+    // --- Auto-import from scan page ---
+    if (window.location.search.includes('import=scan')) {
+        const scanned = localStorage.getItem('scanned-addresses');
+        if (scanned) {
+            localStorage.removeItem('scanned-addresses');
+            const addresses = JSON.parse(scanned);
+            if (addresses.length > 0) {
+                // Open import modal pre-filled with scanned addresses
+                importModal.classList.remove('hidden');
+                importTextarea.value = addresses.join('\n');
+                // Clean URL
+                history.replaceState(null, '', 'index.html');
+            }
+        }
+    }
+
 })();

@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scan Adressen - Route Optimizer</title>
+    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="scan.css" />
+</head>
+<body>
+    <div id="scan-app">
+        <nav class="nav-tabs">
+            <a href="index.html" class="nav-tab">Route</a>
+            <a href="scan.html" class="nav-tab active">Scan adressen</a>
+        </nav>
+
+        <div class="scan-container">
+            <div class="scan-header">
+                <h1>Scan adressen</h1>
+                <p class="subtitle">Upload foto's van post en laat AI de adressen lezen</p>
+            </div>
+
+            <div class="api-section">
+                <label class="option-label">AI Provider</label>
+                <div class="toggle-group">
+                    <button class="toggle-btn active" data-provider="gemini">Gemini</button>
+                    <button class="toggle-btn" data-provider="claude">Claude</button>
+                </div>
+                <div class="api-key-row">
+                    <input type="password" id="api-key" placeholder="Plak je API key..." autocomplete="off" />
+                    <button id="toggle-key-btn" class="btn-secondary" title="Toon/verberg key">&#128065;</button>
+                </div>
+                <p class="api-hint">Je key wordt alleen lokaal opgeslagen in je browser.</p>
+            </div>
+
+            <div class="upload-section">
+                <div id="drop-zone" class="drop-zone">
+                    <div class="drop-zone-content">
+                        <span class="drop-icon">&#128247;</span>
+                        <p>Sleep foto's hierheen of klik om te uploaden</p>
+                        <p class="drop-hint">JPG, PNG — meerdere foto's tegelijk mogelijk</p>
+                    </div>
+                    <input type="file" id="file-input" accept="image/*" multiple hidden />
+                </div>
+            </div>
+
+            <div id="photos-section" class="photos-section hidden">
+                <div class="photos-header">
+                    <h2>Foto's <span id="photo-count">(0)</span></h2>
+                    <button id="clear-photos-btn" class="btn-text">Wis alles</button>
+                </div>
+                <div id="photos-grid" class="photos-grid"></div>
+                <button id="scan-all-btn" class="btn-primary btn-large" style="width:100%; margin-top: 12px;">
+                    Scan alle foto's
+                </button>
+            </div>
+
+            <div id="results-section" class="results-section hidden">
+                <div class="results-header">
+                    <h2>Gevonden adressen</h2>
+                    <span id="result-count" class="result-badge">0</span>
+                </div>
+                <ul id="results-list" class="results-list"></ul>
+                <div class="results-actions">
+                    <button id="copy-addresses-btn" class="btn-secondary">&#128203; Kopieer adressen</button>
+                    <button id="send-to-route-btn" class="btn-primary">&#10132; Naar routeplanner</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="loading-overlay" class="hidden">
+        <div class="spinner"></div>
+        <p id="loading-text">Adressen worden gescand...</p>
+    </div>
+
+    <script src="scan.js"></script>
+</body>
+</html>
