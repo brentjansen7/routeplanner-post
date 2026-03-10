@@ -317,9 +317,29 @@
         return lastResult;
     }
 
+    // Normaliseer adres naar "Straatnaam Huisnummer, 1234 AB Plaats"
+    function normalizeAddress(street, postcodeText, city) {
+        // Postcode normaliseren: "1234ab" → "1234 AB"
+        const pcMatch = postcodeText.match(/(\d{4})\s*([A-Za-z]{2})/);
+        const postcode = pcMatch ? `${pcMatch[1]} ${pcMatch[2].toUpperCase()}` : postcodeText;
+
+        // Plaatsnaam uit postcode-regel halen als die er al in zit
+        const cityInPc = postcodeText.replace(/\d{4}\s*[A-Za-z]{2}/, '').trim();
+        const place = cityInPc.length > 2 ? cityInPc : city;
+
+        // Straatnaam opruimen: geen dubbele spaties, begin met hoofdletter
+        const cleanStreet = street.replace(/\s+/g, ' ').trim();
+
+        if (cleanStreet && place) return `${cleanStreet}, ${postcode} ${place}`;
+        if (cleanStreet) return `${cleanStreet}, ${postcode}`;
+        if (place) return `${postcode} ${place}`;
+        return postcode;
+    }
+
     function parseRecipientAddress(data, city = '') {
         const postcodeRe = /\b(\d{4})\s*([A-Za-z]{2})\b/;
-        const streetRe = /[A-Za-zÀ-ÿ]{3,}.*\d+/;
+        // Straatregel: begint met woord van 4+ letters, eindigt met huisnummer (max 4 cijfers)
+        const streetRe = /^[A-Za-zÀ-ÿ]{4,}[A-Za-zÀ-ÿ\s\-\.\']*\s+\d{1,4}[A-Za-zÀ-ÿ\-]?\s*$/;
         const lines = data.lines || [];
         const cityLower = city.toLowerCase();
 
@@ -374,10 +394,7 @@
             ? streetLine.text.trim() : '';
 
         const pcText = recipientLine.text.trim();
-        // Voeg plaatsnaam toe als die niet al in het resultaat zit
-        const fullAddress = street ? `${street}, ${pcText}` : pcText;
-        const finalAddress = (city && !fullAddress.toLowerCase().includes(cityLower))
-            ? `${fullAddress} ${city}` : fullAddress;
+        const finalAddress = normalizeAddress(street, pcText, city);
 
         // Eindscheck: geef alleen terug als het er als een echt adres uitziet
         if (!isRealisticAddress(finalAddress)) {
