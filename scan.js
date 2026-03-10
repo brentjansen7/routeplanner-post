@@ -250,7 +250,7 @@
         return worker;
     }
 
-    function preprocessImage(dataUrl, { maxWidth, filter }) {
+    function preprocessImage(dataUrl, { maxWidth, filter, binarize }) {
         return new Promise(resolve => {
             const img = new Image();
             img.onload = () => {
@@ -265,7 +265,21 @@
                 const ctx = canvas.getContext('2d');
                 if (filter) ctx.filter = filter;
                 ctx.drawImage(img, 0, 0, w, h);
-                resolve(canvas.toDataURL('image/jpeg', 0.95));
+
+                // Binarisatie: zet afbeelding om naar zwart-wit met drempelwaarde
+                // Helpt bij onduidelijke labels op plastic zakken
+                if (binarize) {
+                    const imgData = ctx.getImageData(0, 0, w, h);
+                    const d = imgData.data;
+                    for (let i = 0; i < d.length; i += 4) {
+                        const lum = d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114;
+                        const val = lum > binarize ? 255 : 0;
+                        d[i] = d[i+1] = d[i+2] = val;
+                    }
+                    ctx.putImageData(imgData, 0, 0);
+                }
+
+                resolve(canvas.toDataURL('image/png'));
             };
             img.src = dataUrl;
         });
@@ -304,23 +318,20 @@
         const worker = await getWorker();
         const city = scanCityInput.value.trim();
 
-        // PSM 4 = single column (adres-label formaat), betere herkenning voor labels
-        // PSM 6 = single block (default fallback)
         const strategiesList = [
-            { maxWidth: 2000, filter: null,                                  psm: 4 },
-            { maxWidth: 2000, filter: 'contrast(1.5) brightness(1.05)',      psm: 4 },
-            { maxWidth: 2000, filter: 'grayscale(1) contrast(2)',            psm: 4 },
-            { maxWidth: null,  filter: 'grayscale(1) contrast(2.5) brightness(1.1)', psm: 4 },
-            { maxWidth: null,  filter: 'invert(1) contrast(2)',              psm: 4 },
-            { maxWidth: 2000, filter: 'grayscale(1) contrast(3)',            psm: 6 },
+            { maxWidth: 2000, filter: null,                                        psm: 4 },
+            { maxWidth: 2000, filter: 'contrast(1.5) brightness(1.05)',            psm: 4 },
+            { maxWidth: 2000, filter: 'grayscale(1) contrast(2)',                  psm: 4 },
+            { maxWidth: null,  filter: 'grayscale(1) contrast(2.5)',               psm: 4 },
+            { maxWidth: null,  binarize: 140,                                       psm: 4 },
+            { maxWidth: null,  binarize: 100,                                       psm: 4 },
+            { maxWidth: null,  filter: 'invert(1)', binarize: 140,                 psm: 4 },
+            { maxWidth: 2000, filter: 'grayscale(1) contrast(2)',                  psm: 6 },
         ];
 
         let lastResult = null;
         for (const strategy of strategiesList) {
-            await worker.setParameters({
-                tessedit_pageseg_mode: strategy.psm,
-                tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÀ-ÿ0123456789 .,\'-/',
-            });
+            await worker.setParameters({ tessedit_pageseg_mode: strategy.psm });
             const processed = await preprocessImage(dataUrl, strategy);
             const { data } = await worker.recognize(processed);
             const result = parseRecipientAddress(data, city);
@@ -365,7 +376,7 @@
         if (!/^[A-Za-zÀ-ÿ]{3,}/.test(t)) return null;
         // Straatnaam mag ALLEEN letters/spaties/koppeltekens bevatten, gevolgd door 1 huisnummer
         // Optionele komma tussen naam en nummer ("Pluim-es, 104" → naam="Pluim-es", nummer="104")
-        const match = t.match(/^([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s\-\.\']*),?\s+(\d{1,4}[A-Za-z]?)\s*$/);
+        const match = t.match(/^([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s\-\.\']*)[,;]?\s+(\d{1,4}[A-Za-z]?)\s*$/);
         if (!match) return null;
         const name = match[1].trim();
         const number = match[2];
@@ -431,8 +442,8 @@
             .filter(l => l.bbox.y0 < recipientLine.bbox.y0)
             .sort((a, b) => b.bbox.y0 - a.bbox.y0);
 
-        // Alleen de 2 regels direct boven de postcode bekijken (verder = bedrijfsnaam/naam persoon)
-        let parsed = above.slice(0, 2).reduce((found, l) => found || parseStreetLine(l.text), null);
+        // Maximaal 3 regels boven de postcode (bedrijfsnamen worden afgevangen door 22-char limiet)
+        let parsed = above.slice(0, 3).reduce((found, l) => found || parseStreetLine(l.text), null);
 
         // Fallback: soms zet Tesseract straat + postcode op 1 regel
         // Zoek dan naar tekst VÓÓR de postcode op diezelfde regel
