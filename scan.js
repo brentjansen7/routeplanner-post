@@ -283,7 +283,7 @@
         const postcodeRe = /\b\d{4}\s*[A-Za-z]{2}\b/;
         if (!postcodeRe.test(text)) return false;
 
-        // Moet minstens één woord van 3+ letters bevatten (straatnaam)
+        // Moet minstens één woord van 3+ letters bevatten (straatnaam of plaatsnaam)
         const hasWord = /[A-Za-zÀ-ÿ]{3,}/.test(text);
         if (!hasWord) return false;
 
@@ -291,8 +291,9 @@
         const specialChars = (text.match(/[^A-Za-z0-9À-ÿ\s,.\-]/g) || []).length;
         if (specialChars / text.length > 0.4) return false;
 
-        // Huisnummer moet een realistisch getal zijn (1–9999)
-        const houseNr = text.match(/\b(\d+)\b/g) || [];
+        // Huisnummer moet aanwezig zijn — maar postcode-cijfers tellen NIET mee
+        const withoutPostcode = text.replace(/\b\d{4}\s*[A-Za-z]{2}\b/, '');
+        const houseNr = withoutPostcode.match(/\b(\d+)\b/g) || [];
         const hasRealisticNr = houseNr.some(n => parseInt(n) >= 1 && parseInt(n) <= 9999);
         if (!hasRealisticNr) return false;
 
@@ -418,7 +419,15 @@
             .filter(l => l.bbox.y0 < recipientLine.bbox.y0)
             .sort((a, b) => b.bbox.y0 - a.bbox.y0);
 
-        const parsed = above.slice(0, 3).reduce((found, l) => found || parseStreetLine(l.text), null);
+        let parsed = above.slice(0, 3).reduce((found, l) => found || parseStreetLine(l.text), null);
+
+        // Fallback: soms zet Tesseract straat + postcode op 1 regel
+        // Zoek dan naar tekst VÓÓR de postcode op diezelfde regel
+        if (!parsed) {
+            const beforePostcode = recipientLine.text.replace(/\d{4}\s*[A-Za-z]{2}.*$/, '').trim();
+            if (beforePostcode) parsed = parseStreetLine(beforePostcode);
+        }
+
         // Bouw straat op als "Naam Huisnummer" zodat er altijd maar 1 huisnummer is
         const street = parsed ? `${parsed.name} ${parsed.number}` : '';
 
