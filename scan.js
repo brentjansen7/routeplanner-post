@@ -345,18 +345,19 @@
 
     // Probeert een straatregel te parsen naar { name, number } of null als het geen echte straat is
     function parseStreetLine(text) {
-        const t = text.trim();
+        // Strip leading garbage symbols (©, –, •, etc.)
+        const t = text.trim().replace(/^[^A-Za-zÀ-ÿ]+/, '');
         // Moet beginnen met hoofdletter gevolgd door 2+ kleine letters (echte straatnaam)
         if (!/^[A-ZÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝ][a-zà-ÿ]{2,}/.test(t)) return null;
-        // Moet eindigen op een huisnummer (1-4 cijfers, optioneel letter suffix)
-        const match = t.match(/^(.*\D)\s+(\d{1,4}[A-Za-z]?)\s*$/);
+        // Straatnaam mag ALLEEN letters/spaties/koppeltekens bevatten, gevolgd door 1 huisnummer
+        const match = t.match(/^([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s\-\.\']*)\s+(\d{1,4}[A-Za-z]?)\s*$/);
         if (!match) return null;
         const name = match[1].trim();
         const number = match[2];
         // Straatnaam mag geen lange reeksen van 1-2 letter fragmenten bevatten (rommel)
         const words = name.split(/\s+/);
         const shortWords = words.filter(w => w.replace(/[^A-Za-zÀ-ÿ]/g, '').length <= 2);
-        if (shortWords.length > words.length / 2) return null; // meer dan helft zijn korte woorden
+        if (shortWords.length > words.length / 2) return null;
         return { name, number };
     }
 
