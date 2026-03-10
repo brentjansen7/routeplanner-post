@@ -111,10 +111,12 @@
         state.photos.forEach(photo => {
             const card = document.createElement('div');
             card.className = `photo-card${photo.status === 'scanning' ? ' scanning' : ''}`;
+            const errorTitle = photo.error ? ` title="${escapeHtml(photo.error)}"` : '';
             card.innerHTML = `
                 <img src="${photo.dataUrl}" alt="Foto" />
                 <button class="photo-remove" data-id="${photo.id}">&times;</button>
-                <span class="photo-status ${photo.status}">${statusIcon(photo.status)}</span>
+                <span class="photo-status ${photo.status}"${errorTitle}>${statusIcon(photo.status)}</span>
+                ${photo.status === 'error' && photo.error ? `<div class="photo-error-label">${escapeHtml(shortError(photo.error))}</div>` : ''}
             `;
             photosGrid.appendChild(card);
         });
@@ -176,12 +178,14 @@
             try {
                 const addresses = await scanPhoto(photo, key);
                 photo.status = 'done';
+                photo.error = null;
                 for (const addr of addresses) {
                     state.addresses.push({ text: addr, photoId: photo.id });
                 }
             } catch (err) {
                 console.error('Scan error:', err);
                 photo.status = 'error';
+                photo.error = err.message;
             }
 
             renderPhotos();
@@ -189,6 +193,11 @@
         }
 
         showLoading(false);
+
+        const failed = state.photos.filter(p => p.status === 'error');
+        if (failed.length > 0) {
+            showScanError(failed[0].error || 'Onbekende fout');
+        }
     });
 
     // --- AI scan ---
@@ -228,8 +237,9 @@
         );
 
         if (!res.ok) {
-            const err = await res.text();
-            throw new Error(`Gemini API error: ${res.status} - ${err}`);
+            let errText = await res.text();
+            try { errText = JSON.parse(errText).error?.message || errText; } catch (e) {}
+            throw new Error(`Gemini ${res.status}: ${errText.substring(0, 300)}`);
         }
 
         const data = await res.json();
@@ -273,8 +283,9 @@
         });
 
         if (!res.ok) {
-            const err = await res.text();
-            throw new Error(`Claude API error: ${res.status} - ${err}`);
+            let errText = await res.text();
+            try { errText = JSON.parse(errText).error?.message || errText; } catch (e) {}
+            throw new Error(`Claude ${res.status}: ${errText.substring(0, 300)}`);
         }
 
         const data = await res.json();
@@ -332,6 +343,33 @@
         localStorage.setItem('scanned-addresses', JSON.stringify(addresses));
         window.location.href = 'index.html?import=scan';
     });
+
+    // --- Error notice ---
+    function showScanError(errorMsg) {
+        let notice = document.getElementById('scan-error-notice');
+        if (!notice) {
+            notice = document.createElement('div');
+            notice.id = 'scan-error-notice';
+            notice.className = 'scan-error-notice';
+            document.querySelector('.scan-container').prepend(notice);
+        }
+        const isKeyError = /40[013]|API_KEY|invalid|expired/i.test(errorMsg);
+        notice.innerHTML = `
+            <div class="scan-error-body">
+                <strong>Scannen mislukt:</strong> ${escapeHtml(errorMsg.substring(0, 250))}
+                ${isKeyError ? '<br><small>Tip: voeg een eigen API key toe via "Instellingen", of gebruik een andere provider.</small>' : ''}
+            </div>
+            <button class="scan-error-close">&times;</button>
+        `;
+        notice.querySelector('.scan-error-close').addEventListener('click', () => notice.remove());
+    }
+
+    function shortError(msg) {
+        // Show a short version of the error in the photo label
+        const m = msg.match(/\d{3}: (.+)/);
+        const text = m ? m[1] : msg;
+        return text.length > 40 ? text.substring(0, 40) + '…' : text;
+    }
 
     // --- Helpers ---
     function showLoading(show, text) {

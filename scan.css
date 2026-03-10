@@ -191,9 +191,59 @@
     line-height: 1;
 }
 
+.photo-card .photo-status.scanning {
+    background: #4361ee;
+}
+
 .photo-card.scanning {
     border-color: #4361ee;
     animation: pulse-border 1s ease-in-out infinite;
+}
+
+.photo-error-label {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: rgba(239, 68, 68, 0.88);
+    color: white;
+    font-size: 10px;
+    padding: 3px 6px;
+    line-height: 1.3;
+    word-break: break-word;
+}
+
+.scan-error-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    background: #fef2f2;
+    border: 1px solid #fca5a5;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+    color: #dc2626;
+    position: relative;
+}
+
+.scan-error-body {
+    flex: 1;
+    line-height: 1.5;
+}
+
+.scan-error-body small {
+    color: #b91c1c;
+}
+
+.scan-error-close {
+    border: none;
+    background: none;
+    color: #dc2626;
+    font-size: 20px;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0;
+    flex-shrink: 0;
 }
 
 @keyframes pulse-border {
