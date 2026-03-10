@@ -354,8 +354,8 @@
     function parseStreetLine(text) {
         // Strip leading garbage symbols (©, –, •, etc.)
         const t = text.trim().replace(/^[^A-Za-zÀ-ÿ]+/, '');
-        // Moet beginnen met hoofdletter gevolgd door 2+ kleine letters (echte straatnaam)
-        if (!/^[A-ZÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝ][a-zà-ÿ]{2,}/.test(t)) return null;
+        // Moet beginnen met minstens 3 letters (werkt ook bij HOOFDLETTERS zoals "HYACINT 8")
+        if (!/^[A-Za-zÀ-ÿ]{3,}/.test(t)) return null;
         // Straatnaam mag ALLEEN letters/spaties/koppeltekens bevatten, gevolgd door 1 huisnummer
         const match = t.match(/^([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s\-\.\']*)\s+(\d{1,4}[A-Za-z]?)\s*$/);
         if (!match) return null;
@@ -419,7 +419,7 @@
             .filter(l => l.bbox.y0 < recipientLine.bbox.y0)
             .sort((a, b) => b.bbox.y0 - a.bbox.y0);
 
-        let parsed = above.slice(0, 3).reduce((found, l) => found || parseStreetLine(l.text), null);
+        let parsed = above.slice(0, 5).reduce((found, l) => found || parseStreetLine(l.text), null);
 
         // Fallback: soms zet Tesseract straat + postcode op 1 regel
         // Zoek dan naar tekst VÓÓR de postcode op diezelfde regel
