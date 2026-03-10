@@ -320,15 +320,16 @@
     // Normaliseer adres naar "Straatnaam Huisnummer, 1234 AB Plaats"
     function normalizeAddress(street, postcodeText, city) {
         // Postcode normaliseren: "1234ab" → "1234 AB"
-        const pcMatch = postcodeText.match(/(\d{4})\s*([A-Za-z]{2})/);
-        const postcode = pcMatch ? `${pcMatch[1]} ${pcMatch[2].toUpperCase()}` : postcodeText;
+        const pcMatch = postcodeText.match(/(\d{4})\s*([A-Za-z]{2})(.*)/);
+        if (!pcMatch) return street || postcodeText;
+        const postcode = `${pcMatch[1]} ${pcMatch[2].toUpperCase()}`;
 
-        // Plaatsnaam uit postcode-regel halen als die er al in zit
-        const cityInPc = postcodeText.replace(/\d{4}\s*[A-Za-z]{2}/, '').trim();
-        const place = cityInPc.length > 2 ? cityInPc : city;
+        // Plaatsnaam = alleen tekst ACHTER de postcode (niet de rommel ervóór)
+        const cityInPc = pcMatch[3].trim();
+        const place = cityInPc.length > 1 ? cityInPc : city;
 
-        // Straatnaam opruimen: geen dubbele spaties, begin met hoofdletter
-        const cleanStreet = street.replace(/\s+/g, ' ').trim();
+        // Straatnaam opruimen: alleen letters, cijfers, spaties en koppeltekens
+        const cleanStreet = street.replace(/[^A-Za-zÀ-ÿ0-9\s\-]/g, '').replace(/\s+/g, ' ').trim();
 
         if (cleanStreet && place) return `${cleanStreet}, ${postcode} ${place}`;
         if (cleanStreet) return `${cleanStreet}, ${postcode}`;
