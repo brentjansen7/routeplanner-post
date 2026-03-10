@@ -1148,10 +1148,12 @@
     });
 
     // Import modal
+    const importCity = document.getElementById('import-city');
+
     importBtn.addEventListener('click', () => {
         importModal.classList.remove('hidden');
         importTextarea.value = '';
-        importTextarea.focus();
+        importCity.focus();
     });
 
     importCancel.addEventListener('click', () => {
@@ -1165,6 +1167,7 @@
     });
 
     importConfirm.addEventListener('click', async () => {
+        const city = importCity.value.trim();
         const lines = importTextarea.value.split('\n').map(l => l.trim()).filter(l => l.length > 0);
         if (lines.length === 0) return;
 
@@ -1172,11 +1175,18 @@
         showLoading(true);
 
         let added = 0;
+        const failed = [];
         for (const line of lines) {
-            const result = await geocodeAddress(line);
+            // Append city/village if provided and the line doesn't already contain it
+            const query = city && !line.toLowerCase().includes(city.toLowerCase())
+                ? `${line}, ${city}`
+                : line;
+            const result = await geocodeAddress(query);
             if (result) {
                 addMarker(result.lat, result.lng, result.name);
                 added++;
+            } else {
+                failed.push(line);
             }
             // Small delay to respect Nominatim rate limits
             await new Promise(r => setTimeout(r, 1100));
@@ -1184,8 +1194,8 @@
 
         showLoading(false);
 
-        if (added < lines.length) {
-            alert(`${added} van ${lines.length} adressen gevonden en toegevoegd.`);
+        if (failed.length > 0) {
+            alert(`${added} van ${lines.length} adressen toegevoegd.\n\nNiet gevonden:\n${failed.join('\n')}`);
         }
     });
 

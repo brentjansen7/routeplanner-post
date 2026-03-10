@@ -28,8 +28,12 @@
                 <div id="import-modal" class="modal hidden">
                     <div class="modal-content">
                         <h3>Importeer adressen</h3>
+                        <div class="import-city-row">
+                            <label for="import-city">Plaats (optioneel):</label>
+                            <input type="text" id="import-city" placeholder="bijv. Veenendaal" autocomplete="off" />
+                        </div>
                         <p>Eén adres per regel:</p>
-                        <textarea id="import-textarea" rows="8" placeholder="Damrak 1, Amsterdam&#10;Markt 1, Breda&#10;Stationsplein 1, Utrecht"></textarea>
+                        <textarea id="import-textarea" rows="8" placeholder="Lavendel 63&#10;Lavendel 65&#10;Vijverlaan 12&#10;De Brink 4"></textarea>
                         <div class="modal-actions">
                             <button id="import-cancel" class="btn-secondary">Annuleren</button>
                             <button id="import-confirm" class="btn-primary">Importeren</button>
