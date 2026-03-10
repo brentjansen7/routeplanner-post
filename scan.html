@@ -23,16 +23,17 @@
             <details class="api-section">
                 <summary class="api-toggle">Instellingen (optioneel)</summary>
                 <div class="api-section-inner">
-                    <label class="option-label">AI Provider</label>
+                    <label class="option-label">Methode</label>
                     <div class="toggle-group">
-                        <button class="toggle-btn active" data-provider="gemini">Gemini (standaard)</button>
-                        <button class="toggle-btn" data-provider="claude">Claude</button>
+                        <button class="toggle-btn active" data-provider="ocr">&#128275; Gratis OCR</button>
+                        <button class="toggle-btn" data-provider="gemini">Gemini AI</button>
+                        <button class="toggle-btn" data-provider="claude">Claude AI</button>
                     </div>
-                    <div class="api-key-row">
-                        <input type="password" id="api-key" placeholder="Eigen API key (optioneel)" autocomplete="off" />
+                    <div class="api-key-row" id="api-key-row">
+                        <input type="password" id="api-key" placeholder="API key (verplicht voor Gemini/Claude)" autocomplete="off" />
                         <button id="toggle-key-btn" class="btn-secondary" title="Toon/verberg key">&#128065;</button>
                     </div>
-                    <p class="api-hint">Laat leeg om de standaard Gemini key te gebruiken. Vul een eigen key in voor Claude of hogere limieten.</p>
+                    <p class="api-hint" id="api-hint">Gratis OCR werkt zonder API key — tekst wordt lokaal herkend in de browser.</p>
                 </div>
             </details>
 
@@ -77,6 +78,7 @@
         <p id="loading-text">Adressen worden gescand...</p>
     </div>
 
+    <script src="https://unpkg.com/tesseract.js@5/dist/tesseract.min.js"></script>
     <script src="scan.js"></script>
 </body>
 </html>

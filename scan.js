@@ -3,7 +3,7 @@
 
     // --- State ---
     const state = {
-        provider: 'gemini',
+        provider: 'ocr',
         photos: [],      // { id, file, dataUrl, status: 'pending'|'done'|'error' }
         addresses: [],   // { text, photoId }
         nextId: 1,
@@ -11,6 +11,8 @@
 
     // --- DOM refs ---
     const apiKeyInput = document.getElementById('api-key');
+    const apiKeyRow = document.getElementById('api-key-row');
+    const apiHint = document.getElementById('api-hint');
     const toggleKeyBtn = document.getElementById('toggle-key-btn');
     const dropZone = document.getElementById('drop-zone');
     const fileInput = document.getElementById('file-input');
@@ -50,8 +52,22 @@
             btn.classList.add('active');
             state.provider = btn.dataset.provider;
             localStorage.setItem('scan-provider', state.provider);
+            updateProviderUI();
         });
     });
+
+    function updateProviderUI() {
+        const isOcr = state.provider === 'ocr';
+        apiKeyRow.style.display = isOcr ? 'none' : '';
+        if (isOcr) {
+            apiHint.textContent = 'Gratis OCR werkt zonder API key — tekst wordt lokaal herkend in de browser.';
+        } else if (state.provider === 'gemini') {
+            apiHint.textContent = 'Vul je eigen Gemini key in (gratis via aistudio.google.com).';
+        } else {
+            apiHint.textContent = 'Vul je eigen Claude API key in (anthropic.com).';
+        }
+    }
+    updateProviderUI();
 
     // --- API key ---
     apiKeyInput.addEventListener('input', () => {
@@ -111,10 +127,13 @@
         state.photos.forEach(photo => {
             const card = document.createElement('div');
             card.className = `photo-card${photo.status === 'scanning' ? ' scanning' : ''}`;
+            const errorTitle = photo.status === 'error' && photo.errorMsg
+                ? ` title="${escapeHtml(photo.errorMsg)}"` : '';
             card.innerHTML = `
                 <img src="${photo.dataUrl}" alt="Foto" />
                 <button class="photo-remove" data-id="${photo.id}">&times;</button>
-                <span class="photo-status ${photo.status}">${statusIcon(photo.status)}</span>
+                <span class="photo-status ${photo.status}"${errorTitle}>${statusIcon(photo.status)}</span>
+                ${photo.status === 'error' && photo.errorMsg ? `<div class="photo-error-msg">${escapeHtml(photo.errorMsg)}</div>` : ''}
             `;
             photosGrid.appendChild(card);
         });
@@ -150,13 +169,9 @@
     scanAllBtn.addEventListener('click', async () => {
         let key = apiKeyInput.value.trim();
 
-        // Use built-in Gemini key if no custom key provided
-        if (!key) {
-            if (state.provider === 'claude') {
-                alert('Voor Claude heb je een eigen API key nodig.\nOpen "Instellingen" en plak je key, of gebruik Gemini (standaard).');
-                return;
-            }
-            key = getBuiltinKey();
+        if (state.provider !== 'ocr' && !key) {
+            alert(`Voor ${state.provider === 'gemini' ? 'Gemini' : 'Claude'} heb je een eigen API key nodig.\nOf kies "Gratis OCR" — die werkt zonder key.`);
+            return;
         }
 
         const pending = state.photos.filter(p => p.status === 'pending' || p.status === 'error');
@@ -182,6 +197,7 @@
             } catch (err) {
                 console.error('Scan error:', err);
                 photo.status = 'error';
+                photo.errorMsg = err.message || 'Onbekende fout';
             }
 
             renderPhotos();
@@ -189,6 +205,12 @@
         }
 
         showLoading(false);
+
+        const errors = state.photos.filter(p => p.status === 'error');
+        if (errors.length > 0 && state.addresses.length === 0) {
+            const msg = errors[0].errorMsg || 'Onbekende fout';
+            alert(`Scannen mislukt:\n${msg}\n\nControleer je API key of probeer het opnieuw.`);
+        }
     });
 
     // --- AI scan ---
@@ -196,11 +218,60 @@
         const base64 = photo.dataUrl.split(',')[1];
         const mimeType = photo.file.type || 'image/jpeg';
 
-        if (state.provider === 'gemini') {
+        if (state.provider === 'ocr') {
+            return await scanWithTesseract(photo.dataUrl);
+        } else if (state.provider === 'gemini') {
             return await scanWithGemini(base64, mimeType, apiKey);
         } else {
             return await scanWithClaude(base64, mimeType, apiKey);
         }
+    }
+
+    async function scanWithTesseract(dataUrl) {
+        const { createWorker } = Tesseract;
+        const worker = await createWorker('nld+eng');
+        const { data } = await worker.recognize(dataUrl);
+        await worker.terminate();
+        return parseRecipientAddress(data);
+    }
+
+    function parseRecipientAddress(data) {
+        const postcodeRe = /\b(\d{4})\s*([A-Z]{2})\b/;
+        const streetRe = /[A-Za-zÀ-ÿ]{3,}.*\d+/;
+        const lines = data.lines || [];
+
+        // Vind de postcode-regel die het LAAGST op de afbeelding staat (= ontvanger)
+        let recipientLine = null;
+        let maxY = -1;
+
+        for (const line of lines) {
+            const text = line.text.trim();
+            if (postcodeRe.test(text) && line.bbox.y0 > maxY) {
+                maxY = line.bbox.y0;
+                recipientLine = line;
+            }
+        }
+
+        if (!recipientLine) {
+            // Fallback: geen postcode gevonden, pak de laagste adres-achtige regel
+            const addrPattern = /^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s\-\.\']{2,}\s+\d+/;
+            const matches = lines
+                .filter(l => addrPattern.test(l.text.trim()))
+                .sort((a, b) => b.bbox.y0 - a.bbox.y0);
+            return matches.length ? [matches[0].text.trim()] : [];
+        }
+
+        // Zoek de straatregel: de regel direct boven de postcode-regel
+        const above = lines
+            .filter(l => l.bbox.y0 < recipientLine.bbox.y0)
+            .sort((a, b) => b.bbox.y0 - a.bbox.y0);
+
+        const streetLine = above[0];
+        const street = streetLine && streetRe.test(streetLine.text.trim())
+            ? streetLine.text.trim() : '';
+
+        const pcText = recipientLine.text.trim();
+        return [street ? `${street}, ${pcText}` : pcText];
     }
 
     async function scanWithGemini(base64, mimeType, apiKey) {
@@ -229,6 +300,9 @@
 
         if (!res.ok) {
             const err = await res.text();
+            if (res.status === 429) {
+                throw new Error('Quota overschreden. Haal een gratis API key op via aistudio.google.com en vul hem in bij Instellingen.');
+            }
             throw new Error(`Gemini API error: ${res.status} - ${err}`);
         }
 
@@ -286,7 +360,7 @@
         if (!text || text.trim().toUpperCase() === 'GEEN') return [];
         return text
             .split('\n')
-            .map(line => line.replace(/^[-\d.)\s]+/, '').trim())
+            .map(line => line.replace(/^(\d+[.)]\s*|-\s*)/, '').trim())
             .filter(line => line.length > 3 && line.toUpperCase() !== 'GEEN');
     }
 
