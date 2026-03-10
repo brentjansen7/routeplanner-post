@@ -304,16 +304,23 @@
         const worker = await getWorker();
         const city = scanCityInput.value.trim();
 
-        // Strategieën: elke poging met betere beeldverwerking als vorige mislukt
-        const strategies = [
-            { maxWidth: 2000, filter: null },
-            { maxWidth: 2000, filter: 'contrast(1.5) brightness(1.05)' },
-            { maxWidth: 2000, filter: 'grayscale(1) contrast(2)' },
-            { maxWidth: null,  filter: 'grayscale(1) contrast(2.5) brightness(1.1)' },
+        // PSM 4 = single column (adres-label formaat), betere herkenning voor labels
+        // PSM 6 = single block (default fallback)
+        const strategiesList = [
+            { maxWidth: 2000, filter: null,                                  psm: 4 },
+            { maxWidth: 2000, filter: 'contrast(1.5) brightness(1.05)',      psm: 4 },
+            { maxWidth: 2000, filter: 'grayscale(1) contrast(2)',            psm: 4 },
+            { maxWidth: null,  filter: 'grayscale(1) contrast(2.5) brightness(1.1)', psm: 4 },
+            { maxWidth: null,  filter: 'invert(1) contrast(2)',              psm: 4 },
+            { maxWidth: 2000, filter: 'grayscale(1) contrast(3)',            psm: 6 },
         ];
 
         let lastResult = null;
-        for (const strategy of strategies) {
+        for (const strategy of strategiesList) {
+            await worker.setParameters({
+                tessedit_pageseg_mode: strategy.psm,
+                tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÀ-ÿ0123456789 .,\'-/',
+            });
             const processed = await preprocessImage(dataUrl, strategy);
             const { data } = await worker.recognize(processed);
             const result = parseRecipientAddress(data, city);
