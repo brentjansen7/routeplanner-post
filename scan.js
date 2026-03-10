@@ -29,10 +29,6 @@
     const loadingOverlay = document.getElementById('loading-overlay');
     const loadingText = document.getElementById('loading-text');
 
-    // --- Built-in Gemini key (free tier) ---
-    // Rotated parts to avoid automated scraping
-    const _gk = ['AIzaSyBp8', 'DmelkV_ga', '6FISRUvVr', 'zs9P1K9TgSt4'];
-    function getBuiltinKey() { return _gk.join(''); }
 
     // --- Load saved API key + provider ---
     const savedKey = localStorage.getItem('scan-api-key');
@@ -227,16 +223,29 @@
         }
     }
 
+    // Worker wordt vooraf geladen bij pagina-start
+    let _workerReady = null;
+    function preloadWorker() {
+        _workerReady = Tesseract.createWorker('nld+eng')
+            .catch(() => null);
+    }
+    preloadWorker();
+
+    async function getWorker() {
+        if (!_workerReady) preloadWorker();
+        const worker = await _workerReady;
+        if (!worker) throw new Error('OCR worker kon niet laden');
+        return worker;
+    }
+
     async function scanWithTesseract(dataUrl) {
-        const { createWorker } = Tesseract;
-        const worker = await createWorker('nld+eng');
+        const worker = await getWorker();
         const { data } = await worker.recognize(dataUrl);
-        await worker.terminate();
         return parseRecipientAddress(data);
     }
 
     function parseRecipientAddress(data) {
-        const postcodeRe = /\b(\d{4})\s*([A-Z]{2})\b/;
+        const postcodeRe = /\b(\d{4})\s*([A-Za-z]{2})\b/;
         const streetRe = /[A-Za-zÀ-ÿ]{3,}.*\d+/;
         const lines = data.lines || [];
 
@@ -253,12 +262,24 @@
         }
 
         if (!recipientLine) {
-            // Fallback: geen postcode gevonden, pak de laagste adres-achtige regel
+            // Fallback 1: adres-patroon (straat + huisnummer)
             const addrPattern = /^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s\-\.\']{2,}\s+\d+/;
             const matches = lines
                 .filter(l => addrPattern.test(l.text.trim()))
                 .sort((a, b) => b.bbox.y0 - a.bbox.y0);
-            return matches.length ? [matches[0].text.trim()] : [];
+            if (matches.length) return [matches[0].text.trim()];
+
+            // Fallback 2: toon alleen leesbare regels (>60% letters/cijfers)
+            const readable = lines
+                .map(l => l.text.trim())
+                .filter(l => {
+                    if (l.length < 4) return false;
+                    const clean = (l.match(/[A-Za-z0-9À-ÿ]/g) || []).length;
+                    return clean / l.length > 0.6;
+                });
+            if (readable.length) return readable;
+
+            return ['Geen adres gevonden — maak een dichtere foto van het adres-label'];
         }
 
         // Zoek de straatregel: de regel direct boven de postcode-regel
