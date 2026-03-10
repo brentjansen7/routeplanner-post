@@ -238,27 +238,53 @@
         return worker;
     }
 
-    function resizeForOCR(dataUrl, maxWidth = 2000) {
+    function preprocessImage(dataUrl, { maxWidth, filter }) {
         return new Promise(resolve => {
             const img = new Image();
             img.onload = () => {
-                if (img.width <= maxWidth) { resolve(dataUrl); return; }
-                const scale = maxWidth / img.width;
+                let w = img.width, h = img.height;
+                if (maxWidth && w > maxWidth) {
+                    h = Math.round(h * maxWidth / w);
+                    w = maxWidth;
+                }
                 const canvas = document.createElement('canvas');
-                canvas.width = maxWidth;
-                canvas.height = Math.round(img.height * scale);
-                canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-                resolve(canvas.toDataURL('image/jpeg', 0.92));
+                canvas.width = w;
+                canvas.height = h;
+                const ctx = canvas.getContext('2d');
+                if (filter) ctx.filter = filter;
+                ctx.drawImage(img, 0, 0, w, h);
+                resolve(canvas.toDataURL('image/jpeg', 0.95));
             };
             img.src = dataUrl;
         });
     }
 
+    function hasValidAddress(addresses) {
+        const postcodeRe = /\b\d{4}\s*[A-Za-z]{2}\b/;
+        return addresses.some(a => postcodeRe.test(a));
+    }
+
     async function scanWithTesseract(dataUrl) {
         const worker = await getWorker();
-        const resized = await resizeForOCR(dataUrl);
-        const { data } = await worker.recognize(resized);
-        return parseRecipientAddress(data);
+
+        // Strategieën: elke poging met betere beeldverwerking als vorige mislukt
+        const strategies = [
+            { maxWidth: 2000, filter: null },
+            { maxWidth: 2000, filter: 'contrast(1.5) brightness(1.05)' },
+            { maxWidth: 2000, filter: 'grayscale(1) contrast(2)' },
+            { maxWidth: null,  filter: 'grayscale(1) contrast(2.5) brightness(1.1)' },
+        ];
+
+        let lastResult = null;
+        for (const strategy of strategies) {
+            const processed = await preprocessImage(dataUrl, strategy);
+            const { data } = await worker.recognize(processed);
+            const result = parseRecipientAddress(data);
+            lastResult = result;
+            if (hasValidAddress(result)) return result;
+        }
+
+        return lastResult;
     }
 
     function parseRecipientAddress(data) {
