@@ -9,6 +9,11 @@
     <title>Scan Adressen - Route Optimizer</title>
     <link rel="stylesheet" href="style.css" />
     <link rel="stylesheet" href="scan.css?v=9" />
+    <link rel="manifest" href="manifest.json" />
+    <meta name="theme-color" content="#2563eb" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="RouteApp" />
+    <link rel="apple-touch-icon" href="icon-192.png" />
 </head>
 <body>
     <div id="scan-app">
@@ -89,5 +94,8 @@
 
     <script src="https://unpkg.com/tesseract.js@5/dist/tesseract.min.js"></script>
     <script src="scan.js?v=9"></script>
+    <script>
+      if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+    </script>
 </body>
 </html>
