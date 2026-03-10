@@ -357,7 +357,8 @@
         // Moet beginnen met minstens 3 letters (werkt ook bij HOOFDLETTERS zoals "HYACINT 8")
         if (!/^[A-Za-zÀ-ÿ]{3,}/.test(t)) return null;
         // Straatnaam mag ALLEEN letters/spaties/koppeltekens bevatten, gevolgd door 1 huisnummer
-        const match = t.match(/^([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s\-\.\']*)\s+(\d{1,4}[A-Za-z]?)\s*$/);
+        // Optionele komma tussen naam en nummer ("Pluim-es, 104" → naam="Pluim-es", nummer="104")
+        const match = t.match(/^([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s\-\.\']*),?\s+(\d{1,4}[A-Za-z]?)\s*$/);
         if (!match) return null;
         const name = match[1].trim();
         const number = match[2];
@@ -431,7 +432,8 @@
         // Bouw straat op als "Naam Huisnummer" zodat er altijd maar 1 huisnummer is
         const street = parsed ? `${parsed.name} ${parsed.number}` : '';
 
-        const pcText = recipientLine.text.trim();
+        // Strip leading non-alphanumeric rommel (bv. "| 2925CN" → "2925CN")
+        const pcText = recipientLine.text.trim().replace(/^[^A-Za-z0-9]+/, '');
         const finalAddress = normalizeAddress(street, pcText, city);
 
         // Eindscheck: geef alleen terug als het er als een echt adres uitziet
