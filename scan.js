@@ -238,9 +238,26 @@
         return worker;
     }
 
+    function resizeForOCR(dataUrl, maxWidth = 2000) {
+        return new Promise(resolve => {
+            const img = new Image();
+            img.onload = () => {
+                if (img.width <= maxWidth) { resolve(dataUrl); return; }
+                const scale = maxWidth / img.width;
+                const canvas = document.createElement('canvas');
+                canvas.width = maxWidth;
+                canvas.height = Math.round(img.height * scale);
+                canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+                resolve(canvas.toDataURL('image/jpeg', 0.92));
+            };
+            img.src = dataUrl;
+        });
+    }
+
     async function scanWithTesseract(dataUrl) {
         const worker = await getWorker();
-        const { data } = await worker.recognize(dataUrl);
+        const resized = await resizeForOCR(dataUrl);
+        const { data } = await worker.recognize(resized);
         return parseRecipientAddress(data);
     }
 

@@ -57,6 +57,7 @@ body {
     box-shadow: 2px 0 12px rgba(0, 0, 0, 0.1);
     z-index: 1000;
     overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
 }
 
 .sidebar-header {
@@ -709,12 +710,12 @@ body {
     #sidebar {
         width: 100%;
         min-width: unset;
-        height: 45vh;
+        height: 50vh;
         order: 2;
     }
 
     #map {
-        height: 55vh;
+        height: 50vh;
         order: 1;
     }
 }
