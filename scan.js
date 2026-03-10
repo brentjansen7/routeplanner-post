@@ -336,10 +336,25 @@
         return postcode;
     }
 
+    // Probeert een straatregel te parsen naar { name, number } of null als het geen echte straat is
+    function parseStreetLine(text) {
+        const t = text.trim();
+        // Moet beginnen met hoofdletter gevolgd door 2+ kleine letters (echte straatnaam)
+        if (!/^[A-ZÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝ][a-zà-ÿ]{2,}/.test(t)) return null;
+        // Moet eindigen op een huisnummer (1-4 cijfers, optioneel letter suffix)
+        const match = t.match(/^(.*\D)\s+(\d{1,4}[A-Za-z]?)\s*$/);
+        if (!match) return null;
+        const name = match[1].trim();
+        const number = match[2];
+        // Straatnaam mag geen lange reeksen van 1-2 letter fragmenten bevatten (rommel)
+        const words = name.split(/\s+/);
+        const shortWords = words.filter(w => w.replace(/[^A-Za-zÀ-ÿ]/g, '').length <= 2);
+        if (shortWords.length > words.length / 2) return null; // meer dan helft zijn korte woorden
+        return { name, number };
+    }
+
     function parseRecipientAddress(data, city = '') {
         const postcodeRe = /\b(\d{4})\s*([A-Za-z]{2})\b/;
-        // Straatregel: begint met woord van 4+ letters, eindigt met huisnummer (max 4 cijfers)
-        const streetRe = /^[A-Za-zÀ-ÿ]{4,}[A-Za-zÀ-ÿ\s\-\.\']*\s+\d{1,4}[A-Za-zÀ-ÿ\-]?\s*$/;
         const lines = data.lines || [];
         const cityLower = city.toLowerCase();
 
@@ -389,9 +404,9 @@
             .filter(l => l.bbox.y0 < recipientLine.bbox.y0)
             .sort((a, b) => b.bbox.y0 - a.bbox.y0);
 
-        const streetLine = above[0];
-        const street = streetLine && streetRe.test(streetLine.text.trim())
-            ? streetLine.text.trim() : '';
+        const parsed = above.slice(0, 3).reduce((found, l) => found || parseStreetLine(l.text), null);
+        // Bouw straat op als "Naam Huisnummer" zodat er altijd maar 1 huisnummer is
+        const street = parsed ? `${parsed.name} ${parsed.number}` : '';
 
         const pcText = recipientLine.text.trim();
         const finalAddress = normalizeAddress(street, pcText, city);
