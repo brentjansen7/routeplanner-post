@@ -330,9 +330,15 @@
         if (!pcMatch) return street || postcodeText;
         const postcode = `${pcMatch[1]} ${pcMatch[2].toUpperCase()}`;
 
-        // Plaatsnaam = alleen tekst ACHTER de postcode (niet de rommel ervóór)
-        const cityInPc = pcMatch[3].trim();
-        const place = cityInPc.length > 1 ? cityInPc : city;
+        // Gebruik altijd de door gebruiker ingevulde stad (betrouwbaarder dan OCR)
+        // Als die er niet is: lees uit OCR maar ruim rommel op
+        let place = city.trim();
+        if (!place) {
+            let cityInPc = pcMatch[3].trim();
+            // Strip trailing losse letters/cijfers (OCR-rommel zoals "I", "l", "1")
+            cityInPc = cityInPc.replace(/(\s+[A-Za-z0-9]{1,2})+$/, '').trim();
+            place = cityInPc.length > 2 ? cityInPc : '';
+        }
 
         // Straatnaam opruimen: alleen letters, cijfers, spaties en koppeltekens
         const cleanStreet = street.replace(/[^A-Za-zÀ-ÿ0-9\s\-]/g, '').replace(/\s+/g, ' ').trim();
