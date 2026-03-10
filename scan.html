@@ -20,18 +20,21 @@
                 <p class="subtitle">Upload foto's van post en laat AI de adressen lezen</p>
             </div>
 
-            <div class="api-section">
-                <label class="option-label">AI Provider</label>
-                <div class="toggle-group">
-                    <button class="toggle-btn active" data-provider="gemini">Gemini</button>
-                    <button class="toggle-btn" data-provider="claude">Claude</button>
+            <details class="api-section">
+                <summary class="api-toggle">Instellingen (optioneel)</summary>
+                <div class="api-section-inner">
+                    <label class="option-label">AI Provider</label>
+                    <div class="toggle-group">
+                        <button class="toggle-btn active" data-provider="gemini">Gemini (standaard)</button>
+                        <button class="toggle-btn" data-provider="claude">Claude</button>
+                    </div>
+                    <div class="api-key-row">
+                        <input type="password" id="api-key" placeholder="Eigen API key (optioneel)" autocomplete="off" />
+                        <button id="toggle-key-btn" class="btn-secondary" title="Toon/verberg key">&#128065;</button>
+                    </div>
+                    <p class="api-hint">Laat leeg om de standaard Gemini key te gebruiken. Vul een eigen key in voor Claude of hogere limieten.</p>
                 </div>
-                <div class="api-key-row">
-                    <input type="password" id="api-key" placeholder="Plak je API key..." autocomplete="off" />
-                    <button id="toggle-key-btn" class="btn-secondary" title="Toon/verberg key">&#128065;</button>
-                </div>
-                <p class="api-hint">Je key wordt alleen lokaal opgeslagen in je browser.</p>
-            </div>
+            </details>
 
             <div class="upload-section">
                 <div id="drop-zone" class="drop-zone">

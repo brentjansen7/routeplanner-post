@@ -24,9 +24,30 @@
 
 /* API section */
 .api-section {
+    border: 1px solid #e8e8ef;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.api-toggle {
+    padding: 10px 14px;
+    font-size: 13px;
+    color: #6b7280;
+    cursor: pointer;
+    background: #f8f9fc;
+    user-select: none;
+}
+
+.api-toggle:hover {
+    color: #4361ee;
+}
+
+.api-section-inner {
     display: flex;
     flex-direction: column;
     gap: 8px;
+    padding: 12px 14px;
+    border-top: 1px solid #e8e8ef;
 }
 
 .api-key-row {
