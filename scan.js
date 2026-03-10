@@ -192,7 +192,7 @@
 
             try {
                 const addresses = await scanPhoto(photo, key);
-                const valid = addresses.filter(a => !a.startsWith('Geen adres gevonden'));
+                const valid = addresses.filter(a => isRealisticAddress(a));
                 if (valid.length > 0) {
                     photo.status = 'done';
                     for (const addr of valid) {
@@ -352,8 +352,8 @@
 
     // Probeert een straatregel te parsen naar { name, number } of null als het geen echte straat is
     function parseStreetLine(text) {
-        // Strip leading garbage symbols (©, –, •, etc.)
-        const t = text.trim().replace(/^[^A-Za-zÀ-ÿ]+/, '');
+        // Strip leading én trailing garbage (©, ;, |, etc.)
+        const t = text.trim().replace(/^[^A-Za-zÀ-ÿ]+/, '').replace(/[^A-Za-z0-9]+$/, '').trim();
         // Moet beginnen met minstens 3 letters (werkt ook bij HOOFDLETTERS zoals "HYACINT 8")
         if (!/^[A-Za-zÀ-ÿ]{3,}/.test(t)) return null;
         // Straatnaam mag ALLEEN letters/spaties/koppeltekens bevatten, gevolgd door 1 huisnummer
@@ -366,6 +366,10 @@
         const words = name.split(/\s+/);
         const shortWords = words.filter(w => w.replace(/[^A-Za-zÀ-ÿ]/g, '').length <= 2);
         if (shortWords.length > words.length / 2) return null;
+        // Bedrijfsnamen uitsluiten: naam zonder spaties mag max 22 letters zijn
+        // ("WISSEL VOEDINGSINDUSTRIE MRT" = 26 letters → bedrijfsnaam)
+        const nameLetters = name.replace(/[^A-Za-zÀ-ÿ]/g, '');
+        if (nameLetters.length > 22) return null;
         return { name, number };
     }
 
@@ -420,7 +424,8 @@
             .filter(l => l.bbox.y0 < recipientLine.bbox.y0)
             .sort((a, b) => b.bbox.y0 - a.bbox.y0);
 
-        let parsed = above.slice(0, 5).reduce((found, l) => found || parseStreetLine(l.text), null);
+        // Alleen de 2 regels direct boven de postcode bekijken (verder = bedrijfsnaam/naam persoon)
+        let parsed = above.slice(0, 2).reduce((found, l) => found || parseStreetLine(l.text), null);
 
         // Fallback: soms zet Tesseract straat + postcode op 1 regel
         // Zoek dan naar tekst VÓÓR de postcode op diezelfde regel
