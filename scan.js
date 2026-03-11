@@ -118,13 +118,25 @@
             if (!file.type.startsWith('image/')) continue;
             const reader = new FileReader();
             reader.onload = (e) => {
-                state.photos.push({
-                    id: state.nextId++,
-                    file,
-                    dataUrl: e.target.result,
-                    status: 'pending',
-                });
-                renderPhotos();
+                const dataUrl = e.target.result;
+                // Maak klein thumbnail (200px) voor weergave — los van de grote scan-dataUrl
+                const img = new Image();
+                img.onload = () => {
+                    const c = document.createElement('canvas');
+                    const scale = Math.min(1, 200 / img.width);
+                    c.width = Math.round(img.width * scale);
+                    c.height = Math.round(img.height * scale);
+                    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+                    state.photos.push({
+                        id: state.nextId++,
+                        file,
+                        dataUrl,
+                        thumbUrl: c.toDataURL('image/jpeg', 0.7),
+                        status: 'pending',
+                    });
+                    renderPhotos();
+                };
+                img.src = dataUrl;
             };
             reader.readAsDataURL(file);
         }
@@ -142,7 +154,7 @@
             const errorTitle = photo.status === 'error' && photo.errorMsg
                 ? ` title="${escapeHtml(photo.errorMsg)}"` : '';
             card.innerHTML = `
-                <img src="${photo.dataUrl}" alt="Foto" />
+                <img src="${photo.thumbUrl || photo.dataUrl || ''}" alt="Foto" />
                 <button class="photo-remove" data-id="${photo.id}">&times;</button>
                 <span class="photo-status ${photo.status}"${errorTitle}>${statusIcon(photo.status)}</span>
                 ${photo.status === 'error' && photo.errorMsg ? `<div class="photo-error-msg">${escapeHtml(photo.errorMsg)}</div>` : ''}
@@ -407,41 +419,28 @@
         const city = scanCityInput.value.trim();
 
         // Regio-definities (fracties van de afbeelding)
-        // Adresstickers zitten vaak in een hoek of het onderste deel van de foto
-        const FULL        = null;
-        const BOT_HALF    = { x: 0,    y: 0.5,  w: 1,    h: 0.5  };
-        const BOT_LEFT    = { x: 0,    y: 0.45, w: 0.55, h: 0.55 };
-        const BOT_RIGHT   = { x: 0.45, y: 0.45, w: 0.55, h: 0.55 };
-        const TOP_LEFT    = { x: 0,    y: 0,    w: 0.55, h: 0.55 };
-        const TOP_RIGHT   = { x: 0.45, y: 0,    w: 0.55, h: 0.55 };
-        const CENTER      = { x: 0.2,  y: 0.2,  w: 0.6,  h: 0.6  };
+        const FULL      = null;
+        const BOT_HALF  = { x: 0,    y: 0.5,  w: 1,    h: 0.5  };
+        const BOT_LEFT  = { x: 0,    y: 0.45, w: 0.55, h: 0.55 };
+        const BOT_RIGHT = { x: 0.45, y: 0.45, w: 0.55, h: 0.55 };
+        const TOP_LEFT  = { x: 0,    y: 0,    w: 0.55, h: 0.55 };
+        const TOP_RIGHT = { x: 0.45, y: 0,    w: 0.55, h: 0.55 };
 
-        // Strategieën: eerst volledig beeld, dan regio-crops als dat niet werkt
-        // autoContrast = histogram stretchen (adaptatief aan elke foto)
+        // 8 strategieën gerangschikt van meest naar minst kansrijk
         const strategiesList = [
-            // --- Volledig beeld ---
-            { crop: FULL,      autoContrast: false                    },  // origineel
-            { crop: FULL,      autoContrast: true                     },  // auto-contrast
-            { crop: FULL,      autoContrast: true,  binarize: 150     },  // zwart-wit
-            { crop: FULL,      autoContrast: true,  binarize: 110     },  // zwart-wit donker
-            { crop: FULL,      autoContrast: true,  invert: true, binarize: 150 }, // geïnverteerd
-
-            // --- Onderste helft (meest voorkomende positie sticker) ---
-            { crop: BOT_HALF,  autoContrast: true                     },
-            { crop: BOT_HALF,  autoContrast: true,  binarize: 150     },
-            { crop: BOT_HALF,  autoContrast: true,  invert: true, binarize: 150 },
-
-            // --- Hoeken ---
-            { crop: BOT_LEFT,  autoContrast: true,  binarize: 150     },
-            { crop: BOT_RIGHT, autoContrast: true,  binarize: 150     },
-            { crop: TOP_LEFT,  autoContrast: true,  binarize: 150     },
-            { crop: TOP_RIGHT, autoContrast: true,  binarize: 150     },
-            { crop: CENTER,    autoContrast: true,  binarize: 150     },
+            { crop: FULL,      autoContrast: true                 },  // volledig, auto-contrast
+            { crop: FULL,      autoContrast: true, binarize: 150  },  // volledig, zwart-wit
+            { crop: BOT_HALF,  autoContrast: true                 },  // onderste helft
+            { crop: BOT_HALF,  autoContrast: true, binarize: 150  },  // onderste helft, zwart-wit
+            { crop: BOT_LEFT,  autoContrast: true, binarize: 150  },  // linksonder
+            { crop: BOT_RIGHT, autoContrast: true, binarize: 150  },  // rechtsonder
+            { crop: TOP_LEFT,  autoContrast: true, binarize: 150  },  // linksboven
+            { crop: TOP_RIGHT, autoContrast: true, binarize: 150  },  // rechtsboven
         ];
 
+        await worker.setParameters({ tessedit_pageseg_mode: 4 });
         let lastResult = null;
         for (const strategy of strategiesList) {
-            await worker.setParameters({ tessedit_pageseg_mode: 4 });
             const processed = await preprocessImage(dataUrl, strategy);
             const { data } = await worker.recognize(processed);
             const result = parseRecipientAddress(data, city);
