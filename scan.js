@@ -303,31 +303,66 @@
         return worker;
     }
 
-    function preprocessImage(dataUrl, { maxWidth, filter, binarize }) {
+    // Verwerk afbeelding voor OCR: schalen, croppen, contrast aanpassen
+    // crop = { x, y, w, h } als fracties van 0-1 (bijv. { x:0, y:0.5, w:1, h:0.5 } = onderste helft)
+    function preprocessImage(dataUrl, { maxWidth = 2500, filter, binarize, autoContrast, crop, invert } = {}) {
         return new Promise(resolve => {
             const img = new Image();
             img.onload = () => {
-                let w = img.width, h = img.height;
-                if (maxWidth && w > maxWidth) {
-                    h = Math.round(h * maxWidth / w);
-                    w = maxWidth;
+                // Bepaal bronregio (crop of volledig)
+                const srcX = crop ? Math.round(crop.x * img.width)  : 0;
+                const srcY = crop ? Math.round(crop.y * img.height) : 0;
+                const srcW = crop ? Math.round(crop.w * img.width)  : img.width;
+                const srcH = crop ? Math.round(crop.h * img.height) : img.height;
+
+                // Schaal naar maxWidth
+                let dstW = srcW, dstH = srcH;
+                if (maxWidth && dstW > maxWidth) {
+                    dstH = Math.round(dstH * maxWidth / dstW);
+                    dstW = maxWidth;
                 }
+
                 const canvas = document.createElement('canvas');
-                canvas.width = w;
-                canvas.height = h;
+                canvas.width = dstW;
+                canvas.height = dstH;
                 const ctx = canvas.getContext('2d');
                 if (filter) ctx.filter = filter;
-                ctx.drawImage(img, 0, 0, w, h);
+                ctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, dstW, dstH);
+                ctx.filter = 'none';
 
-                // Binarisatie: zet afbeelding om naar zwart-wit met drempelwaarde
-                // Helpt bij onduidelijke labels op plastic zakken
-                if (binarize) {
-                    const imgData = ctx.getImageData(0, 0, w, h);
-                    const d = imgData.data;
-                    for (let i = 0; i < d.length; i += 4) {
-                        const lum = d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114;
-                        const val = lum > binarize ? 255 : 0;
+                // Pixel-manipulaties op het canvas
+                const imgData = ctx.getImageData(0, 0, dstW, dstH);
+                const d = imgData.data;
+
+                if (autoContrast || binarize || invert) {
+                    // Stap 1: omzetten naar grijswaarden + luminantie berekenen
+                    const lums = new Float32Array(dstW * dstH);
+                    for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+                        lums[p] = d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114;
+                    }
+
+                    // Stap 2: auto-contrast = histogram stretchen naar 0-255
+                    let min = 255, max = 0;
+                    if (autoContrast || binarize) {
+                        for (let p = 0; p < lums.length; p++) {
+                            if (lums[p] < min) min = lums[p];
+                            if (lums[p] > max) max = lums[p];
+                        }
+                    }
+                    const range = max - min || 1;
+
+                    for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+                        let val = autoContrast || binarize
+                            ? Math.round((lums[p] - min) / range * 255)
+                            : lums[p];
+
+                        // Binarisatie na auto-contrast
+                        if (binarize) val = val > binarize ? 255 : 0;
+                        // Inverteer (voor donkere achtergrond met lichte tekst)
+                        if (invert) val = 255 - val;
+
                         d[i] = d[i+1] = d[i+2] = val;
+                        d[i+3] = 255;
                     }
                     ctx.putImageData(imgData, 0, 0);
                 }
@@ -371,18 +406,42 @@
         const worker = await getWorker();
         const city = scanCityInput.value.trim();
 
-        // Max 2500px zodat telefoongeheugen niet overloopt (was onbegrensd)
+        // Regio-definities (fracties van de afbeelding)
+        // Adresstickers zitten vaak in een hoek of het onderste deel van de foto
+        const FULL        = null;
+        const BOT_HALF    = { x: 0,    y: 0.5,  w: 1,    h: 0.5  };
+        const BOT_LEFT    = { x: 0,    y: 0.45, w: 0.55, h: 0.55 };
+        const BOT_RIGHT   = { x: 0.45, y: 0.45, w: 0.55, h: 0.55 };
+        const TOP_LEFT    = { x: 0,    y: 0,    w: 0.55, h: 0.55 };
+        const TOP_RIGHT   = { x: 0.45, y: 0,    w: 0.55, h: 0.55 };
+        const CENTER      = { x: 0.2,  y: 0.2,  w: 0.6,  h: 0.6  };
+
+        // Strategieën: eerst volledig beeld, dan regio-crops als dat niet werkt
+        // autoContrast = histogram stretchen (adaptatief aan elke foto)
         const strategiesList = [
-            { maxWidth: 2500, filter: null,                               psm: 4 },
-            { maxWidth: 2500, filter: 'grayscale(1) contrast(2)',         psm: 4 },
-            { maxWidth: 2500, binarize: 140,                              psm: 4 },
-            { maxWidth: 2500, binarize: 100,                              psm: 4 },
-            { maxWidth: 2500, filter: 'invert(1)', binarize: 140,        psm: 4 },
+            // --- Volledig beeld ---
+            { crop: FULL,      autoContrast: false                    },  // origineel
+            { crop: FULL,      autoContrast: true                     },  // auto-contrast
+            { crop: FULL,      autoContrast: true,  binarize: 150     },  // zwart-wit
+            { crop: FULL,      autoContrast: true,  binarize: 110     },  // zwart-wit donker
+            { crop: FULL,      autoContrast: true,  invert: true, binarize: 150 }, // geïnverteerd
+
+            // --- Onderste helft (meest voorkomende positie sticker) ---
+            { crop: BOT_HALF,  autoContrast: true                     },
+            { crop: BOT_HALF,  autoContrast: true,  binarize: 150     },
+            { crop: BOT_HALF,  autoContrast: true,  invert: true, binarize: 150 },
+
+            // --- Hoeken ---
+            { crop: BOT_LEFT,  autoContrast: true,  binarize: 150     },
+            { crop: BOT_RIGHT, autoContrast: true,  binarize: 150     },
+            { crop: TOP_LEFT,  autoContrast: true,  binarize: 150     },
+            { crop: TOP_RIGHT, autoContrast: true,  binarize: 150     },
+            { crop: CENTER,    autoContrast: true,  binarize: 150     },
         ];
 
         let lastResult = null;
         for (const strategy of strategiesList) {
-            await worker.setParameters({ tessedit_pageseg_mode: strategy.psm });
+            await worker.setParameters({ tessedit_pageseg_mode: 4 });
             const processed = await preprocessImage(dataUrl, strategy);
             const { data } = await worker.recognize(processed);
             const result = parseRecipientAddress(data, city);
@@ -390,7 +449,7 @@
             if (hasValidAddress(result)) return result;
         }
 
-        return lastResult;
+        return lastResult ?? ['Geen adres gevonden — maak een dichtere foto van het adres-label'];
     }
 
     // Normaliseer adres naar "Straatnaam Huisnummer, 1234 AB Plaats"
