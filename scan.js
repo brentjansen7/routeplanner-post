@@ -231,11 +231,24 @@
                 photo.errorMsg = err.message || 'Onbekende fout';
             }
 
+            // Foto uit geheugen vrijgeven na scannen (behoudt kleine thumbnail URL)
+            photo.dataUrl = null;
+
             // Sla gevonden adressen op zodat ze bewaard blijven als de app sluit
             localStorage.setItem('scan-results', JSON.stringify(state.addresses));
 
             renderPhotos();
             renderResults();
+
+            // Worker herstarten elke 10 foto's om geheugenlek te voorkomen
+            if ((i + 1) % 10 === 0) {
+                if (_workerReady) {
+                    const w = await _workerReady;
+                    if (w) await w.terminate();
+                }
+                _workerReady = null;
+                preloadWorker();
+            }
         }
 
         // Scherm-wakker-lock vrijgeven
@@ -358,15 +371,13 @@
         const worker = await getWorker();
         const city = scanCityInput.value.trim();
 
+        // Max 2500px zodat telefoongeheugen niet overloopt (was onbegrensd)
         const strategiesList = [
-            { maxWidth: 2000, filter: null,                                        psm: 4 },
-            { maxWidth: 2000, filter: 'contrast(1.5) brightness(1.05)',            psm: 4 },
-            { maxWidth: 2000, filter: 'grayscale(1) contrast(2)',                  psm: 4 },
-            { maxWidth: null,  filter: 'grayscale(1) contrast(2.5)',               psm: 4 },
-            { maxWidth: null,  binarize: 140,                                       psm: 4 },
-            { maxWidth: null,  binarize: 100,                                       psm: 4 },
-            { maxWidth: null,  filter: 'invert(1)', binarize: 140,                 psm: 4 },
-            { maxWidth: 2000, filter: 'grayscale(1) contrast(2)',                  psm: 6 },
+            { maxWidth: 2500, filter: null,                               psm: 4 },
+            { maxWidth: 2500, filter: 'grayscale(1) contrast(2)',         psm: 4 },
+            { maxWidth: 2500, binarize: 140,                              psm: 4 },
+            { maxWidth: 2500, binarize: 100,                              psm: 4 },
+            { maxWidth: 2500, filter: 'invert(1)', binarize: 140,        psm: 4 },
         ];
 
         let lastResult = null;
