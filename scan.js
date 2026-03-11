@@ -30,13 +30,23 @@
     const loadingText = document.getElementById('loading-text');
     const scanCityInput = document.getElementById('scan-city');
 
-    // --- Load saved API key + provider + city ---
+    // --- Load saved API key + provider + city + scan resultaten ---
     const savedKey = localStorage.getItem('scan-api-key');
     const savedProvider = localStorage.getItem('scan-provider');
     const savedCity = localStorage.getItem('scan-city');
+    const savedResults = localStorage.getItem('scan-results');
     if (savedKey) apiKeyInput.value = savedKey;
     if (savedProvider) state.provider = savedProvider;
     if (savedCity) scanCityInput.value = savedCity;
+    if (savedResults) {
+        try {
+            const parsed = JSON.parse(savedResults);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+                state.addresses = parsed;
+                renderResults();
+            }
+        } catch (_) {}
+    }
 
     scanCityInput.addEventListener('input', () => {
         localStorage.setItem('scan-city', scanCityInput.value.trim());
@@ -184,6 +194,19 @@
 
         showLoading(true, `Scannen: 0 / ${pending.length}...`);
 
+        // Scherm wakker houden tijdens scannen
+        let wakeLock = null;
+        if ('wakeLock' in navigator) {
+            try { wakeLock = await navigator.wakeLock.request('screen'); } catch (_) {}
+        }
+
+        // Vraag toestemming voor notificaties (één keer)
+        if ('Notification' in window && Notification.permission === 'default') {
+            await Notification.requestPermission();
+        }
+
+        const startAddressCount = state.addresses.length;
+
         for (let i = 0; i < pending.length; i++) {
             const photo = pending[i];
             photo.status = 'scanning';
@@ -208,13 +231,30 @@
                 photo.errorMsg = err.message || 'Onbekende fout';
             }
 
+            // Sla gevonden adressen op zodat ze bewaard blijven als de app sluit
+            localStorage.setItem('scan-results', JSON.stringify(state.addresses));
+
             renderPhotos();
             renderResults();
         }
 
+        // Scherm-wakker-lock vrijgeven
+        if (wakeLock) wakeLock.release();
+
         showLoading(false);
 
+        // Pushnotificatie als het scannen klaar is
+        const newFound = state.addresses.length - startAddressCount;
         const errors = state.photos.filter(p => p.status === 'error');
+        if ('Notification' in window && Notification.permission === 'granted') {
+            new Notification('Route Optimizer', {
+                body: newFound > 0
+                    ? `✅ ${newFound} adres${newFound !== 1 ? 'sen' : ''} gevonden!${errors.length ? ` (${errors.length} mislukt)` : ''}`
+                    : `❌ Geen adressen gevonden — maak dichtere foto's van de labels.`,
+                icon: 'icon-192.svg'
+            });
+        }
+
         if (errors.length > 0 && state.addresses.length === 0) {
             const msg = errors[0].errorMsg || 'Onbekende fout';
             alert(`Scannen mislukt:\n${msg}\n\nControleer je API key of probeer het opnieuw.`);
