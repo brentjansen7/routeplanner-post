@@ -1,4 +1,4 @@
-const CACHE = 'route-optimizer-v1';
+const CACHE = 'route-optimizer-v5';
 const ASSETS = [
   '/routeplanner-post/',
   '/routeplanner-post/index.html',
@@ -32,12 +32,12 @@ self.addEventListener('fetch', e => {
     e.respondWith(fetch(e.request).catch(() => new Response('', { status: 503 })));
     return;
   }
-  // App-bestanden: cache-first, dan netwerk
+  // App-bestanden: netwerk-first zodat updates altijd doorkomen, cache als fallback
   e.respondWith(
-    caches.match(e.request).then(cached => cached || fetch(e.request).then(resp => {
+    fetch(e.request).then(resp => {
       const clone = resp.clone();
       caches.open(CACHE).then(cache => cache.put(e.request, clone));
       return resp;
-    }))
+    }).catch(() => caches.match(e.request))
   );
 });
