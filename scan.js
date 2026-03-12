@@ -448,8 +448,9 @@
         if (specialChars / text.length > 0.4) return false;
 
         // Huisnummer moet aanwezig zijn — maar postcode-cijfers tellen NIET mee
+        // \b\d+ matcht ook "12" in "12A" of "12-14"
         const withoutPostcode = text.replace(/\b\d{4}\s*[A-Za-z]{2}\b/, '');
-        const houseNr = withoutPostcode.match(/\b(\d+)\b/g) || [];
+        const houseNr = withoutPostcode.match(/\b\d+/g) || [];
         const hasRealisticNr = houseNr.some(n => parseInt(n) >= 1 && parseInt(n) <= 9999);
         if (!hasRealisticNr) return false;
 
