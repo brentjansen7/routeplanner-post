@@ -317,7 +317,7 @@
 
     // Verwerk afbeelding voor OCR: schalen, croppen, contrast aanpassen
     // crop = { x, y, w, h } als fracties van 0-1 (bijv. { x:0, y:0.5, w:1, h:0.5 } = onderste helft)
-    function preprocessImage(dataUrl, { maxWidth = 2500, filter, binarize, autoContrast, crop, invert } = {}) {
+    function preprocessImage(dataUrl, { maxWidth = 2500, filter, binarize, autoContrast, crop, invert, sharpen, otsu } = {}) {
         return new Promise(resolve => {
             const img = new Image();
             img.onload = () => {
@@ -327,11 +327,16 @@
                 const srcW = crop ? Math.round(crop.w * img.width)  : img.width;
                 const srcH = crop ? Math.round(crop.h * img.height) : img.height;
 
-                // Schaal naar maxWidth
+                // Schaal naar maxWidth — maar crop-regio's opschalen voor beter detail
                 let dstW = srcW, dstH = srcH;
                 if (maxWidth && dstW > maxWidth) {
                     dstH = Math.round(dstH * maxWidth / dstW);
                     dstW = maxWidth;
+                } else if (crop && dstW < 1500) {
+                    // Kleine crop opschalen voor meer detail
+                    const scale = Math.min(3, 1500 / dstW);
+                    dstW = Math.round(dstW * scale);
+                    dstH = Math.round(dstH * scale);
                 }
 
                 const canvas = document.createElement('canvas');
@@ -346,38 +351,75 @@
                 const imgData = ctx.getImageData(0, 0, dstW, dstH);
                 const d = imgData.data;
 
-                if (autoContrast || binarize || invert) {
-                    // Stap 1: omzetten naar grijswaarden + luminantie berekenen
-                    const lums = new Float32Array(dstW * dstH);
-                    for (let i = 0, p = 0; i < d.length; i += 4, p++) {
-                        lums[p] = d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114;
-                    }
+                // Stap 1: omzetten naar grijswaarden
+                const lums = new Float32Array(dstW * dstH);
+                for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+                    lums[p] = d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114;
+                }
 
-                    // Stap 2: auto-contrast = histogram stretchen naar 0-255
-                    let min = 255, max = 0;
-                    if (autoContrast || binarize) {
-                        for (let p = 0; p < lums.length; p++) {
-                            if (lums[p] < min) min = lums[p];
-                            if (lums[p] > max) max = lums[p];
+                // Stap 2: verscherpen (unsharp mask) voor wazige labels
+                let sharpened = lums;
+                if (sharpen) {
+                    sharpened = new Float32Array(dstW * dstH);
+                    const strength = typeof sharpen === 'number' ? sharpen : 1.5;
+                    for (let y = 1; y < dstH - 1; y++) {
+                        for (let x = 1; x < dstW - 1; x++) {
+                            const p = y * dstW + x;
+                            const blur = (lums[p-1] + lums[p+1] + lums[p-dstW] + lums[p+dstW]) * 0.25;
+                            sharpened[p] = Math.max(0, Math.min(255, lums[p] + strength * (lums[p] - blur)));
                         }
                     }
-                    const range = max - min || 1;
-
-                    for (let i = 0, p = 0; i < d.length; i += 4, p++) {
-                        let val = autoContrast || binarize
-                            ? Math.round((lums[p] - min) / range * 255)
-                            : lums[p];
-
-                        // Binarisatie na auto-contrast
-                        if (binarize) val = val > binarize ? 255 : 0;
-                        // Inverteer (voor donkere achtergrond met lichte tekst)
-                        if (invert) val = 255 - val;
-
-                        d[i] = d[i+1] = d[i+2] = val;
-                        d[i+3] = 255;
-                    }
-                    ctx.putImageData(imgData, 0, 0);
                 }
+
+                // Stap 3: auto-contrast = histogram stretchen naar 0-255
+                let min = 255, max = 0;
+                if (autoContrast || binarize || otsu) {
+                    for (let p = 0; p < sharpened.length; p++) {
+                        if (sharpened[p] < min) min = sharpened[p];
+                        if (sharpened[p] > max) max = sharpened[p];
+                    }
+                }
+                const range = max - min || 1;
+
+                // Stap 4: Otsu drempelwaarde berekenen (voor optimale binarisatie)
+                let otsuThreshold = 128;
+                if (otsu || binarize === 'otsu') {
+                    const hist = new Int32Array(256);
+                    for (let p = 0; p < sharpened.length; p++) {
+                        hist[Math.round((sharpened[p] - min) / range * 255)]++;
+                    }
+                    const total = sharpened.length;
+                    let sum = 0;
+                    for (let i = 0; i < 256; i++) sum += i * hist[i];
+                    let sumB = 0, wB = 0, maxVar = 0;
+                    for (let t = 0; t < 256; t++) {
+                        wB += hist[t];
+                        if (!wB) continue;
+                        const wF = total - wB;
+                        if (!wF) break;
+                        sumB += t * hist[t];
+                        const mB = sumB / wB;
+                        const mF = (sum - sumB) / wF;
+                        const between = wB * wF * (mB - mF) * (mB - mF);
+                        if (between > maxVar) { maxVar = between; otsuThreshold = t; }
+                    }
+                }
+
+                for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+                    let val = (autoContrast || binarize || otsu)
+                        ? Math.round((sharpened[p] - min) / range * 255)
+                        : sharpened[p];
+
+                    // Binarisatie na auto-contrast
+                    const threshold = (binarize === 'otsu' || otsu) ? otsuThreshold : binarize;
+                    if (threshold) val = val > threshold ? 255 : 0;
+                    // Inverteer (voor donkere achtergrond met lichte tekst)
+                    if (invert) val = 255 - val;
+
+                    d[i] = d[i+1] = d[i+2] = val;
+                    d[i+3] = 255;
+                }
+                ctx.putImageData(imgData, 0, 0);
 
                 resolve(canvas.toDataURL('image/png'));
             };
@@ -419,29 +461,65 @@
         const city = scanCityInput.value.trim();
 
         // Regio-definities (fracties van de afbeelding)
-        const FULL      = null;
-        const BOT_HALF  = { x: 0,    y: 0.5,  w: 1,    h: 0.5  };
-        const BOT_LEFT  = { x: 0,    y: 0.45, w: 0.55, h: 0.55 };
-        const BOT_RIGHT = { x: 0.45, y: 0.45, w: 0.55, h: 0.55 };
-        const TOP_LEFT  = { x: 0,    y: 0,    w: 0.55, h: 0.55 };
-        const TOP_RIGHT = { x: 0.45, y: 0,    w: 0.55, h: 0.55 };
+        const FULL       = null;
+        const TOP_HALF   = { x: 0,    y: 0,    w: 1,    h: 0.5  };
+        const BOT_HALF   = { x: 0,    y: 0.5,  w: 1,    h: 0.5  };
+        const MID_STRIP  = { x: 0,    y: 0.25, w: 1,    h: 0.5  };
+        const BOT_LEFT   = { x: 0,    y: 0.45, w: 0.55, h: 0.55 };
+        const BOT_RIGHT  = { x: 0.45, y: 0.45, w: 0.55, h: 0.55 };
+        const TOP_LEFT   = { x: 0,    y: 0,    w: 0.55, h: 0.55 };
+        const TOP_RIGHT  = { x: 0.45, y: 0,    w: 0.55, h: 0.55 };
+        const MID_LEFT   = { x: 0,    y: 0.2,  w: 0.55, h: 0.6  };
+        const MID_RIGHT  = { x: 0.45, y: 0.2,  w: 0.55, h: 0.6  };
 
-        // 8 strategieën gerangschikt van meest naar minst kansrijk
+        // Strategieën per PSM-mode — probeer PSM 6 (tekst-blok) en PSM 4 (kolom) allebei
+        // Gerangschikt van meest naar minst kansrijk
         const strategiesList = [
-            { crop: FULL,      autoContrast: true                 },  // volledig, auto-contrast
-            { crop: FULL,      autoContrast: true, binarize: 150  },  // volledig, zwart-wit
-            { crop: BOT_HALF,  autoContrast: true                 },  // onderste helft
-            { crop: BOT_HALF,  autoContrast: true, binarize: 150  },  // onderste helft, zwart-wit
-            { crop: BOT_LEFT,  autoContrast: true, binarize: 150  },  // linksonder
-            { crop: BOT_RIGHT, autoContrast: true, binarize: 150  },  // rechtsonder
-            { crop: TOP_LEFT,  autoContrast: true, binarize: 150  },  // linksboven
-            { crop: TOP_RIGHT, autoContrast: true, binarize: 150  },  // rechtsboven
+            // Volledige foto — snel en werkt voor duidelijke labels
+            { psm: 6, crop: FULL,      autoContrast: true, sharpen: 1.5              },
+            { psm: 6, crop: FULL,      autoContrast: true, otsu: true                },
+            { psm: 4, crop: FULL,      autoContrast: true, sharpen: 1.5              },
+
+            // Onderste helft — stickers zitten vaak onderaan
+            { psm: 6, crop: BOT_HALF,  autoContrast: true, sharpen: 1.5              },
+            { psm: 6, crop: BOT_HALF,  autoContrast: true, otsu: true                },
+            { psm: 4, crop: BOT_HALF,  autoContrast: true, otsu: true                },
+
+            // Bovenste helft
+            { psm: 6, crop: TOP_HALF,  autoContrast: true, otsu: true                },
+
+            // Midden-strip (horizontale baan door midden)
+            { psm: 6, crop: MID_STRIP, autoContrast: true, otsu: true                },
+
+            // Hoeken — label kan overal zitten
+            { psm: 6, crop: BOT_LEFT,  autoContrast: true, otsu: true                },
+            { psm: 6, crop: BOT_RIGHT, autoContrast: true, otsu: true                },
+            { psm: 6, crop: TOP_LEFT,  autoContrast: true, otsu: true                },
+            { psm: 6, crop: TOP_RIGHT, autoContrast: true, otsu: true                },
+
+            // Midden-kolommen
+            { psm: 6, crop: MID_LEFT,  autoContrast: true, otsu: true                },
+            { psm: 6, crop: MID_RIGHT, autoContrast: true, otsu: true                },
+
+            // Fallbacks: geïnverteerd voor donkere stickers met lichte tekst
+            { psm: 6, crop: FULL,      autoContrast: true, otsu: true, invert: true   },
+            { psm: 6, crop: BOT_HALF,  autoContrast: true, otsu: true, invert: true   },
+
+            // PSM 11 (ruwe tekstdetectie) als alles faalt
+            { psm: 11, crop: FULL,     autoContrast: true, otsu: true                },
+            { psm: 11, crop: BOT_HALF, autoContrast: true, otsu: true                },
         ];
 
-        await worker.setParameters({ tessedit_pageseg_mode: 4 });
         let lastResult = null;
+        let lastPsm = null;
         for (const strategy of strategiesList) {
-            const processed = await preprocessImage(dataUrl, strategy);
+            // PSM enkel instellen als hij verandert
+            if (strategy.psm !== lastPsm) {
+                await worker.setParameters({ tessedit_pageseg_mode: strategy.psm });
+                lastPsm = strategy.psm;
+            }
+            const { psm: _psm, ...preprocessOpts } = strategy;
+            const processed = await preprocessImage(dataUrl, preprocessOpts);
             const { data } = await worker.recognize(processed);
             const result = parseRecipientAddress(data, city);
             lastResult = result;
@@ -480,23 +558,37 @@
     // Probeert een straatregel te parsen naar { name, number } of null als het geen echte straat is
     function parseStreetLine(text) {
         // Strip leading én trailing garbage (©, ;, |, etc.)
-        const t = text.trim().replace(/^[^A-Za-zÀ-ÿ]+/, '').replace(/[^A-Za-z0-9]+$/, '').trim();
-        // Moet beginnen met minstens 3 letters (werkt ook bij HOOFDLETTERS zoals "HYACINT 8")
-        if (!/^[A-Za-zÀ-ÿ]{3,}/.test(t)) return null;
-        // Straatnaam mag ALLEEN letters/spaties/koppeltekens bevatten, gevolgd door 1 huisnummer
-        // Optionele komma tussen naam en nummer ("Pluim-es, 104" → naam="Pluim-es", nummer="104")
-        const match = t.match(/^([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s\-\.\']*)[,;]?\s+(\d{1,4}[A-Za-z]?)\s*$/);
+        const t = text.trim().replace(/^[^A-Za-zÀ-ÿ\d]+/, '').replace(/[^A-Za-z0-9]+$/, '').trim();
+
+        // Speciaal geval: straat begint met cijfer (bijv. "2e Hyacintstraat 8")
+        const startsWithNum = /^\d[A-Za-z]?\s+[A-Za-zÀ-ÿ]/.test(t);
+
+        // Moet beginnen met minstens 2 letters OF een getal gevolgd door letters
+        if (!startsWithNum && !/^[A-Za-zÀ-ÿ]{2,}/.test(t)) return null;
+
+        // Straatnaam + huisnummer — soepelere regex:
+        // - naam kan beginnen met getal ("2e ...", "3de ...")
+        // - komma/puntkomma toegestaan tussen naam en huisnummer
+        // - toevoeging na huisnummer toegestaan (bijv. "12A", "12-14", "12 bis")
+        const match = t.match(
+            /^((?:\d[A-Za-z]?\s+)?[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ0-9\s\-\.\']*?)[,;\s]+(\d{1,4}[A-Za-z\-]?(?:\s*(?:bis|ter))?)[\s,;]*$/i
+        );
         if (!match) return null;
+
         const name = match[1].trim();
-        const number = match[2];
+        const number = match[2].trim();
+
+        if (!name || name.length < 2) return null;
+
         // Straatnaam mag geen lange reeksen van 1-2 letter fragmenten bevatten (rommel)
         const words = name.split(/\s+/);
-        const shortWords = words.filter(w => w.replace(/[^A-Za-zÀ-ÿ]/g, '').length <= 2);
-        if (shortWords.length > words.length / 2) return null;
-        // Bedrijfsnamen uitsluiten: naam zonder spaties mag max 22 letters zijn
-        // ("WISSEL VOEDINGSINDUSTRIE MRT" = 26 letters → bedrijfsnaam)
+        const longWords = words.filter(w => w.replace(/[^A-Za-zÀ-ÿ]/g, '').length >= 3);
+        if (longWords.length === 0) return null;
+
+        // Bedrijfsnamen uitsluiten: naam zonder spaties mag max 26 letters zijn
         const nameLetters = name.replace(/[^A-Za-zÀ-ÿ]/g, '');
-        if (nameLetters.length > 22) return null;
+        if (nameLetters.length > 26) return null;
+
         return { name, number };
     }
 
@@ -551,8 +643,8 @@
             .filter(l => l.bbox.y0 < recipientLine.bbox.y0)
             .sort((a, b) => b.bbox.y0 - a.bbox.y0);
 
-        // Maximaal 3 regels boven de postcode (bedrijfsnamen worden afgevangen door 22-char limiet)
-        let parsed = above.slice(0, 3).reduce((found, l) => found || parseStreetLine(l.text), null);
+        // Maximaal 5 regels boven de postcode (bedrijfsnamen worden afgevangen door 26-char limiet)
+        let parsed = above.slice(0, 5).reduce((found, l) => found || parseStreetLine(l.text), null);
 
         // Fallback: soms zet Tesseract straat + postcode op 1 regel
         // Zoek dan naar tekst VÓÓR de postcode op diezelfde regel
