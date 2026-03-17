@@ -1171,22 +1171,38 @@
         const lines = importTextarea.value.split('\n').map(l => l.trim()).filter(l => l.length > 0);
         if (lines.length === 0) return;
 
+        // Veelvoorkomende schrijffouten corrigeren
+        const corrigeer = s => s
+            .replace(/\bBurg\b/gi, 'Burgemeester')
+            .replace(/\bBurgermeester\b/gi, 'Burgemeester');
+
+        // Duplicaten samenvoegen: zelfde adres (hoofdletter-onafhankelijk) → één stop met x2/x3
+        const telling = {};
+        for (const line of lines) {
+            const gecorrigeerd = corrigeer(line);
+            const sleutel = gecorrigeerd.toLowerCase();
+            if (!telling[sleutel]) telling[sleutel] = { origineel: gecorrigeerd, n: 0 };
+            telling[sleutel].n++;
+        }
+        const uniekeLijst = Object.values(telling);
+
         importModal.classList.add('hidden');
         showLoading(true);
 
         let added = 0;
         const failed = [];
-        for (const line of lines) {
+        for (const { origineel, n } of uniekeLijst) {
             // Append city/village if provided and the line doesn't already contain it
-            const query = city && !line.toLowerCase().includes(city.toLowerCase())
-                ? `${line}, ${city}`
-                : line;
+            const query = city && !origineel.toLowerCase().includes(city.toLowerCase())
+                ? `${origineel}, ${city}`
+                : origineel;
             const result = await geocodeAddress(query);
             if (result) {
-                addMarker(result.lat, result.lng, result.name);
+                const naam = n > 1 ? `${result.name}  x${n}` : result.name;
+                addMarker(result.lat, result.lng, naam);
                 added++;
             } else {
-                failed.push(line);
+                failed.push(origineel);
             }
             // Small delay to respect Nominatim rate limits
             await new Promise(r => setTimeout(r, 1100));
@@ -1195,7 +1211,7 @@
         showLoading(false);
 
         if (failed.length > 0) {
-            alert(`${added} van ${lines.length} adressen toegevoegd.\n\nNiet gevonden:\n${failed.join('\n')}`);
+            alert(`${added} van ${uniekeLijst.length} adressen toegevoegd.\n\nNiet gevonden:\n${failed.join('\n')}`);
         }
     });
 
