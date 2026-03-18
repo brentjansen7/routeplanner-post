@@ -50,7 +50,8 @@
     const modeBikeBtn = document.getElementById('mode-bike');
     const modeWalkBtn = document.getElementById('mode-walk');
     const roundTripCheckbox = document.getElementById('round-trip');
-    const copyRouteBtn = document.getElementById('copy-route-btn');
+    const copyRouteBtn   = document.getElementById('copy-route-btn');
+    const mapsRouteBtns  = document.getElementById('maps-route-btns');
 
     // --- Marker creation ---
     function createNumberedIcon(number, total) {
@@ -1012,6 +1013,7 @@
         }
 
         routeSummary.classList.remove('hidden');
+        renderMapsButtons();
     }
 
     // --- Loading ---
@@ -1131,6 +1133,41 @@
         updateButtons();
         clearRoute();
     });
+
+    // Google Maps navigatie
+    function buildGoogleMapsUrls(stops, travelMode) {
+        const mode = { auto: 'driving', fiets: 'bicycling', lopen: 'walking' }[travelMode] || 'driving';
+        const coords = stops.map(s => `${s.lat},${s.lng}`);
+        const CHUNK = 11; // origin + max 9 waypoints + destination
+        const urls = [];
+        for (let i = 0; i < coords.length; i += CHUNK - 1) {
+            const chunk = coords.slice(i, i + CHUNK);
+            if (chunk.length < 2) break;
+            const origin = chunk[0];
+            const dest   = chunk[chunk.length - 1];
+            const mid    = chunk.slice(1, -1);
+            let url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${dest}&travelmode=${mode}`;
+            if (mid.length) url += `&waypoints=${mid.join('|')}`;
+            urls.push(url);
+        }
+        return urls;
+    }
+
+    function renderMapsButtons() {
+        mapsRouteBtns.innerHTML = '';
+        if (state.stops.length < 2) return;
+        const urls = buildGoogleMapsUrls(state.stops, state.travelMode);
+        urls.forEach((url, i) => {
+            const btn = document.createElement('button');
+            btn.className = 'btn-secondary';
+            btn.style.cssText = 'width:100%; margin-top:6px;';
+            btn.innerHTML = urls.length === 1
+                ? '🗺️ Navigeer in Google Maps'
+                : `🗺️ Google Maps — etappe ${i + 1} van ${urls.length}`;
+            btn.addEventListener('click', () => window.open(url, '_blank'));
+            mapsRouteBtns.appendChild(btn);
+        });
+    }
 
     // Copy route list
     copyRouteBtn.addEventListener('click', () => {
