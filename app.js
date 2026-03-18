@@ -11,6 +11,7 @@
         stops: [],          // { id, name, lat, lng, marker }
         routeLine: null,
         optimized: false,
+        currentEtappe: 0,
         nextId: 1,
         travelMode: 'driving',  // 'driving', 'cycling', or 'foot'
         roundTrip: false,
@@ -1156,17 +1157,48 @@
     function renderMapsButtons() {
         mapsRouteBtns.innerHTML = '';
         if (state.stops.length < 2) return;
+
         const urls = buildGoogleMapsUrls(state.stops, state.travelMode);
-        urls.forEach((url, i) => {
-            const btn = document.createElement('button');
-            btn.className = 'btn-secondary';
-            btn.style.cssText = 'width:100%; margin-top:6px;';
-            btn.innerHTML = urls.length === 1
-                ? '🗺️ Navigeer in Google Maps'
-                : `🗺️ Google Maps — etappe ${i + 1} van ${urls.length}`;
-            btn.addEventListener('click', () => window.open(url, '_blank'));
-            mapsRouteBtns.appendChild(btn);
+        state.currentEtappe = 0;
+
+        const btn   = document.createElement('button');
+        btn.className = 'btn-secondary';
+        btn.style.cssText = 'width:100%; margin-top:8px; padding: 10px 12px;';
+
+        const label = document.createElement('div');
+        const sub   = document.createElement('small');
+        sub.style.cssText = 'display:block; opacity:0.7; font-size:11px; margin-top:2px;';
+        btn.appendChild(label);
+        btn.appendChild(sub);
+
+        function updateBtn() {
+            const idx   = state.currentEtappe;
+            const total = urls.length;
+            if (total === 1) {
+                label.textContent = '🗺️ Navigeer in Google Maps';
+                sub.textContent   = '';
+            } else if (idx === 0) {
+                label.textContent = `🗺️ Start navigatie — etappe 1 / ${total}`;
+                sub.textContent   = `${state.stops.length} stops verdeeld in ${total} etappes`;
+            } else if (idx < total) {
+                label.textContent = `✅ Etappe ${idx} / ${total} klaar → naar etappe ${idx + 1}`;
+                sub.textContent   = `Stops ${idx * 10 + 1}–${Math.min((idx + 1) * 10, state.stops.length)}`;
+            } else {
+                label.textContent = '🏁 Route voltooid! Opnieuw starten';
+                sub.textContent   = '';
+            }
+        }
+
+        updateBtn();
+
+        btn.addEventListener('click', () => {
+            const idx = state.currentEtappe >= urls.length ? 0 : state.currentEtappe;
+            window.open(urls[idx], '_blank');
+            state.currentEtappe = idx >= urls.length - 1 ? urls.length : idx + 1;
+            updateBtn();
         });
+
+        mapsRouteBtns.appendChild(btn);
     }
 
     // Copy route list
