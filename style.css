@@ -701,23 +701,116 @@ body {
     background: #b0b4c0;
 }
 
-/* Responsive */
+/* ===== Mobiel: bottom-sheet lay-out ===== */
 @media (max-width: 768px) {
-    #app {
-        flex-direction: column;
+
+    body { overflow: hidden; }
+
+    #app { position: relative; height: 100vh; }
+
+    /* Kaart vult het volledige scherm */
+    #map {
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        height: 100vh !important;
+        z-index: 1;
     }
 
+    /* Sidebar als bottom sheet */
     #sidebar {
+        position: fixed;
+        bottom: 0; left: 0; right: 0;
         width: 100%;
         min-width: unset;
-        height: 50vh;
-        order: 2;
+        height: 64vh;
+        z-index: 500;
+        border-radius: 20px 20px 0 0;
+        box-shadow: 0 -6px 32px rgba(0,0,0,.18);
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
     }
 
-    #map {
-        height: 50vh;
-        order: 1;
+    /* Drag-handvat bovenaan de sheet */
+    #sidebar::before {
+        content: '';
+        display: block;
+        width: 44px; height: 5px;
+        background: #d0d4e0;
+        border-radius: 3px;
+        margin: 10px auto 0;
     }
+
+    /* Nav tabs – groter */
+    .nav-tab { padding: 14px 16px; font-size: 15px; }
+
+    /* Header – compacter */
+    .sidebar-header { padding: 10px 16px 8px; }
+    .sidebar-header h1 { font-size: 17px; }
+    .subtitle { display: none; }
+
+    /* Zoekbalk – 16px voorkomt iOS-zoom */
+    .search-section { padding: 10px 16px 6px; }
+    #address-input { padding: 13px 14px; font-size: 16px; height: 48px; }
+    #add-address-btn { width: 48px; height: 48px; font-size: 22px; border-radius: 10px; }
+
+    /* Import */
+    .import-section { padding: 0 16px 8px; }
+    #import-btn { padding: 12px; font-size: 14px; height: 44px; }
+
+    /* Stops lijst */
+    .stops-section { padding: 6px 16px; }
+    .stop-item { padding: 12px 14px; margin-bottom: 8px; border-radius: 10px; }
+    .stop-name { font-size: 14px; }
+    .stop-number { width: 30px; height: 30px; font-size: 13px; }
+    .stop-remove { width: 36px; height: 36px; font-size: 18px; }
+    .drag-handle { font-size: 18px; }
+
+    /* Vervoer-knoppen */
+    .options-section { padding: 6px 16px 0; }
+    .toggle-btn { padding: 12px 4px; font-size: 14px; }
+    .option-check { padding: 10px 0; font-size: 14px; }
+    .option-check input[type="checkbox"] { width: 20px; height: 20px; }
+
+    /* Actie-knoppen */
+    .actions-section { padding: 10px 16px; gap: 10px; }
+    .btn-large { padding: 16px 20px; font-size: 16px; border-radius: 12px; }
+    .btn-secondary { padding: 12px 16px; font-size: 14px; height: 44px; }
+
+    /* Opgeslagen routes */
+    #saved-routes-section select {
+        font-size: 14px; padding: 10px 8px; height: 44px; border-radius: 10px;
+    }
+    #saved-routes-section button { padding: 10px 12px; height: 44px; font-size: 17px; }
+
+    /* Route samenvatting */
+    .route-summary { padding: 12px 16px; }
+    .stat-value { font-size: 20px; }
+    .stat-label { font-size: 10px; }
+    .route-steps { max-height: 260px; }
+    .route-step { padding: 10px 0; font-size: 14px; }
+    .step-number { width: 26px; height: 26px; font-size: 12px; }
+    .step-distance { font-size: 11px; }
+
+    /* Bezorg-acties per stap: grotere knoppen */
+    .bz-ok, .bz-nt, .bz-note { padding: 6px 10px; font-size: 14px; }
+
+    /* Kopieer / afdruk knoppen */
+    #copy-route-btn, #print-route-btn { height: 48px; font-size: 15px; border-radius: 12px; }
+
+    /* Modal: slide omhoog */
+    .modal { align-items: flex-end; }
+    .modal-content {
+        width: 100%;
+        border-radius: 20px 20px 0 0;
+        padding: 20px 16px 32px;
+        max-height: 90vh;
+        overflow-y: auto;
+    }
+    .import-city-row input, .modal-content textarea {
+        font-size: 16px; /* voorkomt iOS-zoom */
+    }
+    .modal-actions { gap: 10px; }
+    .modal-actions button { flex: 1; padding: 14px; font-size: 15px; height: 50px; }
 }
 
 @media print {
