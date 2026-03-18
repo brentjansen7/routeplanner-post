@@ -1216,6 +1216,78 @@
         });
     });
 
+    // Print route
+    document.getElementById('print-route-btn').addEventListener('click', () => window.print());
+
+    // Route opslaan & laden
+    const savedRoutesSelect = document.getElementById('saved-routes-select');
+
+    function getSavedRoutes() {
+        return JSON.parse(localStorage.getItem('savedRoutes') || '{}');
+    }
+
+    function updateSavedRoutesSelect() {
+        const routes = getSavedRoutes();
+        const current = savedRoutesSelect.value;
+        savedRoutesSelect.innerHTML = '<option value="">— Opgeslagen routes —</option>';
+        Object.values(routes).forEach(r => {
+            const opt = document.createElement('option');
+            opt.value = r.naam;
+            opt.textContent = `${r.naam}  (${r.stops.length} stops, ${r.opgeslagenOp})`;
+            savedRoutesSelect.appendChild(opt);
+        });
+        if (current) savedRoutesSelect.value = current;
+    }
+
+    document.getElementById('save-route-btn').addEventListener('click', () => {
+        if (state.stops.length === 0) return alert('Voeg eerst stops toe.');
+        const naam = prompt('Naam voor deze route:', 'Mijn route');
+        if (!naam || !naam.trim()) return;
+        const routes = getSavedRoutes();
+        routes[naam.trim()] = {
+            naam: naam.trim(),
+            stops: state.stops.map(s => ({ name: s.name, lat: s.lat, lng: s.lng })),
+            travelMode: state.travelMode,
+            opgeslagenOp: new Date().toLocaleDateString('nl-NL'),
+        };
+        localStorage.setItem('savedRoutes', JSON.stringify(routes));
+        updateSavedRoutesSelect();
+        savedRoutesSelect.value = naam.trim();
+    });
+
+    document.getElementById('load-route-btn').addEventListener('click', () => {
+        const naam = savedRoutesSelect.value;
+        if (!naam) return alert('Selecteer eerst een route.');
+        const route = getSavedRoutes()[naam];
+        if (!route) return;
+        // Verwijder huidige stops
+        [...state.stops].forEach(s => { s.marker.remove(); });
+        state.stops = [];
+        clearRoute();
+        // Laad opgeslagen stops
+        route.stops.forEach(s => addMarker(s.lat, s.lng, s.name));
+        // Vervoersmiddel herstellen
+        if (route.travelMode) {
+            state.travelMode = route.travelMode;
+            document.querySelectorAll('.travel-btn').forEach(b =>
+                b.classList.toggle('active', b.dataset.mode === route.travelMode));
+        }
+        renderStopsList();
+        updateButtons();
+    });
+
+    document.getElementById('delete-route-btn').addEventListener('click', () => {
+        const naam = savedRoutesSelect.value;
+        if (!naam) return alert('Selecteer eerst een route.');
+        if (!confirm(`Route "${naam}" verwijderen?`)) return;
+        const routes = getSavedRoutes();
+        delete routes[naam];
+        localStorage.setItem('savedRoutes', JSON.stringify(routes));
+        updateSavedRoutesSelect();
+    });
+
+    updateSavedRoutesSelect(); // laad bestaande routes bij opstarten
+
     // Import modal
     const importCity = document.getElementById('import-city');
 
@@ -1240,10 +1312,16 @@
         const lines = importTextarea.value.split('\n').map(l => l.trim()).filter(l => l.length > 0);
         if (lines.length === 0) return;
 
-        // Veelvoorkomende schrijffouten corrigeren
+        // Veelvoorkomende afkortingen en schrijffouten corrigeren
         const corrigeer = s => s
-            .replace(/\bBurg\b/gi, 'Burgemeester')
-            .replace(/\bBurgermeester\b/gi, 'Burgemeester');
+            .replace(/\bBurg\.?\s+/gi,      'Burgemeester ')
+            .replace(/\bBurgermeester\b/gi, 'Burgemeester')
+            .replace(/\bSt\.?\s+/gi,        'Sint ')
+            .replace(/\bDr\.?\s+/gi,        'Doctor ')
+            .replace(/\bProf\.?\s+/gi,      'Professor ')
+            .replace(/\bPr\.?\s+/gi,        'Prins ')
+            .replace(/\bKon\.?\s+/gi,       'Koningin ')
+            .replace(/\bGr\.?\s+/gi,        'Graaf ');
 
         // Duplicaten samenvoegen: zelfde adres (hoofdletter-onafhankelijk) → één stop met x2/x3
         const telling = {};
@@ -1256,11 +1334,23 @@
         const uniekeLijst = Object.values(telling);
 
         importModal.classList.add('hidden');
-        showLoading(true);
+
+        // Voortgangsbalk tonen
+        const progressEl   = document.getElementById('import-progress');
+        const progressFill = document.getElementById('import-progress-fill');
+        const progressText = document.getElementById('import-progress-text');
+        progressEl.classList.remove('hidden');
+        importModal.classList.remove('hidden'); // modal open houden voor voortgang
 
         let added = 0;
         const failed = [];
-        for (const { origineel, n } of uniekeLijst) {
+        for (let i = 0; i < uniekeLijst.length; i++) {
+            const { origineel, n } = uniekeLijst[i];
+            // Voortgang bijwerken
+            const pct = Math.round((i + 1) / uniekeLijst.length * 100);
+            progressFill.style.width = pct + '%';
+            progressText.textContent = `Adres ${i + 1} van ${uniekeLijst.length} ophalen...`;
+
             // Append city/village if provided and the line doesn't already contain it
             const query = city && !origineel.toLowerCase().includes(city.toLowerCase())
                 ? `${origineel}, ${city}`
@@ -1277,7 +1367,8 @@
             await new Promise(r => setTimeout(r, 1100));
         }
 
-        showLoading(false);
+        progressEl.classList.add('hidden');
+        importModal.classList.add('hidden');
 
         if (failed.length > 0) {
             alert(`${added} van ${uniekeLijst.length} adressen toegevoegd.\n\nNiet gevonden:\n${failed.join('\n')}`);

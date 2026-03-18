@@ -43,6 +43,12 @@
                         </div>
                         <p>Eén adres per regel:</p>
                         <textarea id="import-textarea" rows="8" placeholder="Lavendel 63&#10;Lavendel 65&#10;Vijverlaan 12&#10;De Brink 4"></textarea>
+                        <div id="import-progress" class="hidden" style="margin-top:10px;">
+                            <div style="background:#e0e7ff; border-radius:6px; height:8px;">
+                                <div id="import-progress-fill" style="background:#4f6ef7; height:100%; border-radius:6px; width:0%; transition:width 0.3s;"></div>
+                            </div>
+                            <p id="import-progress-text" style="font-size:12px; color:#666; margin:4px 0 0;"></p>
+                        </div>
                         <div class="modal-actions">
                             <button id="import-cancel" class="btn-secondary">Annuleren</button>
                             <button id="import-confirm" class="btn-primary">Importeren</button>
@@ -79,6 +85,14 @@
             </div>
 
             <div class="actions-section">
+                <div id="saved-routes-section" style="display:flex; gap:6px; margin-bottom:8px;">
+                    <select id="saved-routes-select" style="flex:1; padding:8px; border-radius:8px; border:1px solid #ddd; font-size:13px; color:#444;">
+                        <option value="">— Opgeslagen routes —</option>
+                    </select>
+                    <button id="save-route-btn" class="btn-secondary" title="Huidige stops opslaan" style="padding:8px 10px;">💾</button>
+                    <button id="load-route-btn" class="btn-secondary" title="Geselecteerde route laden" style="padding:8px 10px;">📂</button>
+                    <button id="delete-route-btn" class="btn-secondary" title="Geselecteerde route verwijderen" style="padding:8px 10px;">🗑️</button>
+                </div>
                 <button id="optimize-btn" class="btn-primary btn-large" disabled>
                     <span class="btn-icon">⟳</span> Optimaliseer route
                 </button>
@@ -103,6 +117,7 @@
                 </div>
                 <div id="route-steps" class="route-steps"></div>
                 <button id="copy-route-btn" class="btn-secondary" style="margin-top: 12px; width: 100%;">&#128203; Route kopiëren</button>
+                <button id="print-route-btn" class="btn-secondary" style="margin-top: 6px; width: 100%;">&#128438; Route afdrukken</button>
                 <div id="maps-route-btns" style="margin-top: 8px;"></div>
             </div>
         </aside>

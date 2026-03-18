@@ -719,3 +719,20 @@ body {
         order: 1;
     }
 }
+
+@media print {
+    nav, .search-section, .stops-section, .options-section,
+    .actions-section, #map, .import-modal, #maps-route-btns,
+    #copy-route-btn, #print-route-btn, #saved-routes-section,
+    #loading-overlay { display: none !important; }
+
+    body, aside { background: white !important; }
+    aside { width: 100% !important; max-width: 100% !important; box-shadow: none !important; border: none !important; overflow: visible !important; }
+    .route-summary { display: block !important; padding: 0 !important; }
+    .route-steps { max-height: none !important; overflow: visible !important; }
+    .summary-stats { margin-bottom: 12pt; }
+
+    .route-step { font-size: 13pt; padding: 6pt 0; border-bottom: 1px solid #ccc; page-break-inside: avoid; }
+    .step-number { font-weight: bold; min-width: 28pt; }
+    .step-distance { font-size: 11pt; color: #555; }
+}
