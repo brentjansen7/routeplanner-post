@@ -572,7 +572,7 @@
         // - komma/puntkomma toegestaan tussen naam en huisnummer
         // - toevoeging na huisnummer toegestaan (bijv. "12A", "12-14", "12 bis")
         const match = t.match(
-            /^((?:\d[A-Za-z]?\s+)?[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ0-9\s\-\.\']*?)[,;\s]+(\d{1,4}[A-Za-z\-]?(?:\s*(?:bis|ter))?)[\s,;]*$/i
+            /^((?:\d[A-Za-z]?\s+)?[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ0-9\s\-\.\']*?)[,;\s]+(\d{1,4}(?:[A-Za-z\-]|\s+[A-Za-z]{1,3})?(?:\s*(?:bis|ter))?)[\s,;]*$/i
         );
         if (!match) return null;
 
@@ -596,10 +596,10 @@
     function parseRecipientAddress(data, city = '') {
         const postcodeRe = /\b(\d{4})\s*([A-Za-z]{2})\b/;
         const lines = data.lines || [];
-        const cityLower = city.toLowerCase();
+        // Gebruik eerste woord van de stad als zoekwoord:
+        // "krimpen" matcht ook "KRIMPEN AD IJSSEL", "KrimpenaandenIJssel", etc.
+        const cityKeyword = city.toLowerCase().split(/\s+/)[0] || '';
 
-        // Als er een plaats is ingevuld: zoek de postcode-regel die bij die plaats hoort
-        // Anders: pak de postcode-regel die het LAAGST staat (= ontvanger)
         let recipientLine = null;
         let maxY = -1;
 
@@ -607,12 +607,12 @@
             const text = line.text.trim();
             if (!postcodeRe.test(text)) continue;
 
-            if (cityLower) {
-                // Kijk of deze regel of de regels rondom de plaatsnaam bevatten
+            if (cityKeyword) {
+                // Kijk of deze regel of de regels rondom het stadswoord bevatten
                 const idx = lines.indexOf(line);
                 const context = lines.slice(Math.max(0, idx - 2), idx + 3)
                     .map(l => l.text.toLowerCase()).join(' ');
-                if (context.includes(cityLower) && line.bbox.y0 > maxY) {
+                if (context.includes(cityKeyword) && line.bbox.y0 > maxY) {
                     maxY = line.bbox.y0;
                     recipientLine = line;
                 }
@@ -624,13 +624,29 @@
             }
         }
 
-        // Als plaatsfilter niets oplevert, val terug op laagste postcode
-        if (!recipientLine && cityLower) {
+        // Fallback 1: plaatsfilter leverde niets op → laagste postcode
+        if (!recipientLine && cityKeyword) {
             for (const line of lines) {
                 const text = line.text.trim();
                 if (postcodeRe.test(text) && line.bbox.y0 > maxY) {
                     maxY = line.bbox.y0;
                     recipientLine = line;
+                }
+            }
+        }
+
+        // Fallback 2: postcode staat op eigen regel (formaat: Stad / Postcode / Land)
+        if (!recipientLine) {
+            for (const line of lines) {
+                const text = line.text.trim();
+                if (/^\d{4}\s*[A-Za-z]{2}$/.test(text) && line.bbox.y0 > maxY) {
+                    const idx = lines.indexOf(line);
+                    const context = lines.slice(Math.max(0, idx - 3), idx + 2)
+                        .map(l => l.text.toLowerCase()).join(' ');
+                    if (!cityKeyword || context.includes(cityKeyword)) {
+                        maxY = line.bbox.y0;
+                        recipientLine = line;
+                    }
                 }
             }
         }
@@ -648,20 +664,17 @@
         let parsed = above.slice(0, 5).reduce((found, l) => found || parseStreetLine(l.text), null);
 
         // Fallback: soms zet Tesseract straat + postcode op 1 regel
-        // Zoek dan naar tekst VÓÓR de postcode op diezelfde regel
         if (!parsed) {
             const beforePostcode = recipientLine.text.replace(/\d{4}\s*[A-Za-z]{2}.*$/, '').trim();
             if (beforePostcode) parsed = parseStreetLine(beforePostcode);
         }
 
-        // Bouw straat op als "Naam Huisnummer" zodat er altijd maar 1 huisnummer is
         const street = parsed ? `${parsed.name} ${parsed.number}` : '';
 
         // Strip leading non-alphanumeric rommel (bv. "| 2925CN" → "2925CN")
         const pcText = recipientLine.text.trim().replace(/^[^A-Za-z0-9]+/, '');
         const finalAddress = normalizeAddress(street, pcText, city);
 
-        // Eindscheck: geef alleen terug als het er als een echt adres uitziet
         if (!isRealisticAddress(finalAddress)) {
             return ['Geen adres gevonden — maak een dichtere foto van het adres-label'];
         }

@@ -735,4 +735,62 @@ body {
     .route-step { font-size: 13pt; padding: 6pt 0; border-bottom: 1px solid #ccc; page-break-inside: avoid; }
     .step-number { font-weight: bold; min-width: 28pt; }
     .step-distance { font-size: 11pt; color: #555; }
+    #bezorg-btn, #bezorg-stop-btn, #bezorg-scherm, #eind-modal { display: none !important; }
 }
+
+/* ===== Bezorg-modus stijlen ===== */
+.stap-bezorgd { background: #f0fdf4 !important; }
+.stap-bezorgd .step-info { text-decoration: line-through; color: #9ca3af; }
+.stap-niet-thuis { background: #fff7ed !important; }
+.stap-niet-thuis .step-info { color: #ea580c; }
+
+.bezorg-actie-btns { display: flex; gap: 4px; margin-left: auto; flex-shrink: 0; }
+.bz-ok, .bz-nt, .bz-note {
+    border: 1.5px solid #ddd; border-radius: 6px; padding: 3px 7px;
+    cursor: pointer; font-size: 12px; background: white; line-height: 1;
+}
+.bz-ok:hover  { background: #d1fae5; border-color: #10b981; }
+.bz-nt:hover  { background: #fee2e2; border-color: #ef4444; }
+.bz-ok.actief  { background: #10b981; color: white; border-color: #10b981; }
+.bz-nt.actief  { background: #ef4444; color: white; border-color: #ef4444; }
+.bezorg-note-tekst { font-size: 11px; color: #6b7280; font-style: italic; margin-top: 3px; width: 100%; }
+
+/* ===== Compact fullscreen bezorgscherm ===== */
+#bezorg-scherm {
+    position: fixed; inset: 0; z-index: 2000;
+    background: #f8f9fc; display: flex; flex-direction: column;
+    align-items: center; padding: 16px; gap: 12px; overflow-y: auto;
+}
+#bezorg-scherm-header {
+    width: 100%; max-width: 420px; background: white;
+    border-radius: 14px; padding: 14px 16px; box-shadow: 0 2px 12px rgba(0,0,0,.08);
+    text-align: center;
+}
+#bs-counter { font-size: 22px; font-weight: 700; color: #10b981; }
+#bs-timer   { font-size: 12px; color: #9ca3af; margin-top: 2px; }
+#bs-bar-wrap { background: #d1fae5; border-radius: 6px; height: 8px; margin-top: 10px; }
+#bs-bar { background: #10b981; height: 100%; border-radius: 6px; width: 0%; transition: width .4s; }
+
+#bs-nav { display: flex; align-items: center; gap: 16px; }
+#bs-nav button { font-size: 28px; background: white; border: 1.5px solid #e5e7eb; border-radius: 10px; padding: 6px 18px; cursor: pointer; }
+#bs-idx { font-size: 14px; color: #6b7280; min-width: 80px; text-align: center; }
+
+#bs-adres {
+    width: 100%; max-width: 420px; background: white; border-radius: 16px;
+    padding: 28px 20px; box-shadow: 0 2px 16px rgba(0,0,0,.1);
+    font-size: 26px; font-weight: 700; color: #1e293b; text-align: center; line-height: 1.3;
+}
+
+#bs-acties { display: flex; gap: 12px; width: 100%; max-width: 420px; }
+#bs-bezorgd, #bs-niet-thuis {
+    flex: 1; padding: 18px; font-size: 18px; font-weight: 700;
+    border: none; border-radius: 14px; cursor: pointer;
+}
+#bs-bezorgd    { background: #10b981; color: white; }
+#bs-niet-thuis { background: #f97316; color: white; }
+#bs-bezorgd.actief    { background: #059669; box-shadow: 0 0 0 3px #d1fae5; }
+#bs-niet-thuis.actief { background: #ea580c; box-shadow: 0 0 0 3px #fed7aa; }
+
+#bs-notitie { background: white; border: 1.5px solid #e5e7eb; border-radius: 10px; padding: 10px 20px; cursor: pointer; font-size: 14px; }
+#bs-note-text { font-size: 13px; color: #6b7280; font-style: italic; min-height: 20px; text-align: center; }
+#bs-sluiten { margin-top: auto; width: 100%; max-width: 420px; }

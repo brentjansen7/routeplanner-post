@@ -15,6 +15,13 @@
         nextId: 1,
         travelMode: 'driving',  // 'driving', 'cycling', or 'foot'
         roundTrip: false,
+        // Bezorg-modus
+        bezorgModus: false,
+        bezorgStatus: {},   // { stopId: 'bezorgd' | 'niet-thuis' }
+        bezorgNotes:  {},   // { stopId: 'notitietekst' }
+        bezorgStart:  null, // Date
+        bezorgOrder:  [],   // geoptimaliseerde volgorde (array van stop-objecten)
+        bezorgIdx:    0,    // huidig stop-index in compact scherm
     };
 
     // --- Map setup ---
@@ -952,6 +959,7 @@
 
     // --- Route summary ---
     function showRouteSummary(route, matrix, order, deliveryPoints) {
+        state._lastRouteArgs = [route, matrix, order, deliveryPoints];
         const distKm = (route.distance / 1000).toFixed(1);
         const durMin = Math.round(route.duration / 60);
         const hours = Math.floor(durMin / 60);
@@ -993,6 +1001,50 @@
                 <span class="step-info">${escapeHtml(stop.name)}</span>
                 <span class="step-distance">${distText}</span>
             `;
+
+            // Bezorg-modus: afvink-knoppen per stap
+            if (state.bezorgModus) {
+                const status = state.bezorgStatus[stop.id];
+                if (status === 'bezorgd')    div.classList.add('stap-bezorgd');
+                if (status === 'niet-thuis') div.classList.add('stap-niet-thuis');
+
+                const acties = document.createElement('div');
+                acties.className = 'bezorg-actie-btns';
+
+                const btnOk = document.createElement('button');
+                btnOk.className = 'bz-ok' + (status === 'bezorgd' ? ' actief' : '');
+                btnOk.textContent = '✓';
+                btnOk.title = 'Bezorgd';
+                btnOk.addEventListener('click', () => setBezorgStatus(stop.id, 'bezorgd'));
+
+                const btnNt = document.createElement('button');
+                btnNt.className = 'bz-nt' + (status === 'niet-thuis' ? ' actief' : '');
+                btnNt.textContent = '✗';
+                btnNt.title = 'Niet thuis';
+                btnNt.addEventListener('click', () => setBezorgStatus(stop.id, 'niet-thuis'));
+
+                const btnNote = document.createElement('button');
+                btnNote.className = 'bz-note';
+                btnNote.textContent = '📝';
+                btnNote.title = 'Notitie';
+                btnNote.addEventListener('click', () => {
+                    const note = prompt('Notitie voor dit adres:', state.bezorgNotes[stop.id] || '');
+                    if (note !== null) { state.bezorgNotes[stop.id] = note.trim(); herenderBezorg(); }
+                });
+
+                acties.appendChild(btnOk);
+                acties.appendChild(btnNt);
+                acties.appendChild(btnNote);
+                div.appendChild(acties);
+
+                if (state.bezorgNotes[stop.id]) {
+                    const noteEl = document.createElement('div');
+                    noteEl.className = 'bezorg-note-tekst';
+                    noteEl.textContent = '📝 ' + state.bezorgNotes[stop.id];
+                    div.appendChild(noteEl);
+                }
+            }
+
             routeSteps.appendChild(div);
         });
 
@@ -1015,6 +1067,11 @@
 
         routeSummary.classList.remove('hidden');
         renderMapsButtons();
+
+        // Bezorg-modus: sla volgorde op en toon Start-knop
+        state.bezorgOrder = state.stops.slice();
+        const _bezorgBtn = document.getElementById('bezorg-btn');
+        if (_bezorgBtn && !state.bezorgModus) _bezorgBtn.style.display = '';
     }
 
     // --- Loading ---
@@ -1218,6 +1275,189 @@
 
     // Print route
     document.getElementById('print-route-btn').addEventListener('click', () => window.print());
+
+    // ===== BEZORG-MODUS =====
+    const bezorgBtn      = document.getElementById('bezorg-btn');
+    const bezorgStopBtn  = document.getElementById('bezorg-stop-btn');
+    const bezorgProgress = document.getElementById('bezorg-progress');
+    const bezorgCounter  = document.getElementById('bezorg-counter');
+    const bezorgTimer    = document.getElementById('bezorg-timer');
+    const bezorgBar      = document.getElementById('bezorg-bar');
+    const bezorgScherm   = document.getElementById('bezorg-scherm');
+    const eindModal      = document.getElementById('eind-modal');
+    let timerInterval    = null;
+
+    function updateBezorgCounter() {
+        const totaal    = state.stops.length;
+        const bezorgd   = Object.values(state.bezorgStatus).filter(s => s === 'bezorgd').length;
+        const nietThuis = Object.values(state.bezorgStatus).filter(s => s === 'niet-thuis').length;
+        const pct = totaal > 0 ? Math.round(bezorgd / totaal * 100) : 0;
+        bezorgCounter.textContent = `${bezorgd} / ${totaal} bezorgd${nietThuis ? `  ·  ${nietThuis} niet thuis` : ''}`;
+        bezorgBar.style.width = pct + '%';
+        if (state.bezorgStart) {
+            const min = Math.floor((Date.now() - state.bezorgStart) / 60000);
+            bezorgTimer.textContent = `Onderweg: ${min} min`;
+        }
+        // Zelfde voor compact scherm
+        document.getElementById('bs-counter').textContent = bezorgCounter.textContent;
+        document.getElementById('bs-bar').style.width = pct + '%';
+        if (state.bezorgStart) document.getElementById('bs-timer').textContent = bezorgTimer.textContent;
+    }
+
+    function herenderBezorg() {
+        // Herrender route-steps zodat statussen bijgewerkt zijn
+        if (state._lastRouteArgs) showRouteSummary(...state._lastRouteArgs);
+        updateBezorgCounter();
+        updateBsScherm();
+        // Controleer of alle stops een status hebben → eindsamenvatting
+        const totaal = state.stops.length;
+        const afgehandeld = Object.values(state.bezorgStatus).filter(Boolean).length;
+        if (totaal > 0 && afgehandeld === totaal) toonEindSamenvatting();
+    }
+
+    function setBezorgStatus(stopId, status) {
+        state.bezorgStatus[stopId] = state.bezorgStatus[stopId] === status ? null : status;
+        herenderBezorg();
+    }
+
+    bezorgBtn.addEventListener('click', () => {
+        state.bezorgModus  = true;
+        state.bezorgStart  = Date.now();
+        state.bezorgStatus = {};
+        state.bezorgNotes  = {};
+        state.bezorgIdx    = 0;
+        bezorgBtn.style.display     = 'none';
+        bezorgStopBtn.style.display = '';
+        bezorgProgress.classList.remove('hidden');
+        timerInterval = setInterval(updateBezorgCounter, 60000);
+        herenderBezorg();
+        bezorgScherm.classList.remove('hidden'); // direct fullscreen
+        updateBsScherm();
+    });
+
+    bezorgStopBtn.addEventListener('click', () => {
+        if (!confirm('Bezorging stoppen?')) return;
+        stopBezorgModus();
+    });
+
+    function stopBezorgModus() {
+        state.bezorgModus  = false;
+        state.bezorgStart  = null;
+        state.bezorgStatus = {};
+        state.bezorgNotes  = {};
+        clearInterval(timerInterval);
+        bezorgBtn.style.display     = '';
+        bezorgStopBtn.style.display = 'none';
+        bezorgProgress.classList.add('hidden');
+        bezorgScherm.classList.add('hidden');
+        if (state._lastRouteArgs) showRouteSummary(...state._lastRouteArgs);
+    }
+
+    // Compact fullscreen bezorgscherm
+    function updateBsScherm() {
+        const stops  = state.bezorgOrder;
+        if (!stops.length) return;
+        const idx    = Math.max(0, Math.min(state.bezorgIdx, stops.length - 1));
+        state.bezorgIdx = idx;
+        const stop   = stops[idx];
+        const status = state.bezorgStatus[stop.id];
+        document.getElementById('bs-idx').textContent = `stop ${idx + 1} / ${stops.length}`;
+        document.getElementById('bs-adres').textContent = stop.name;
+        document.getElementById('bs-bezorgd').className   = status === 'bezorgd'    ? 'actief' : '';
+        document.getElementById('bs-niet-thuis').className = status === 'niet-thuis' ? 'actief' : '';
+        document.getElementById('bs-note-text').textContent = state.bezorgNotes[stop.id]
+            ? '📝 ' + state.bezorgNotes[stop.id] : '';
+    }
+
+    document.getElementById('bs-prev').addEventListener('click', () => {
+        state.bezorgIdx = Math.max(0, state.bezorgIdx - 1);
+        updateBsScherm();
+    });
+    document.getElementById('bs-next').addEventListener('click', () => {
+        state.bezorgIdx = Math.min(state.bezorgOrder.length - 1, state.bezorgIdx + 1);
+        updateBsScherm();
+    });
+    document.getElementById('bs-bezorgd').addEventListener('click', () => {
+        const stop = state.bezorgOrder[state.bezorgIdx];
+        if (stop) { setBezorgStatus(stop.id, 'bezorgd'); autoAdvance(); }
+    });
+    document.getElementById('bs-niet-thuis').addEventListener('click', () => {
+        const stop = state.bezorgOrder[state.bezorgIdx];
+        if (stop) { setBezorgStatus(stop.id, 'niet-thuis'); autoAdvance(); }
+    });
+    document.getElementById('bs-notitie').addEventListener('click', () => {
+        const stop = state.bezorgOrder[state.bezorgIdx];
+        if (!stop) return;
+        const note = prompt('Notitie:', state.bezorgNotes[stop.id] || '');
+        if (note !== null) { state.bezorgNotes[stop.id] = note.trim(); updateBsScherm(); }
+    });
+    document.getElementById('bs-sluiten').addEventListener('click', () => {
+        bezorgScherm.classList.add('hidden');
+    });
+    // Terug naar compact scherm vanuit routelijst
+    bezorgProgress.addEventListener('click', () => {
+        if (state.bezorgModus) { bezorgScherm.classList.remove('hidden'); updateBsScherm(); }
+    });
+    bezorgProgress.style.cursor = 'pointer';
+    bezorgProgress.title = 'Klik om bezorgscherm te openen';
+
+    function autoAdvance() {
+        // Ga automatisch naar volgende stop zonder status
+        const stops = state.bezorgOrder;
+        for (let i = state.bezorgIdx + 1; i < stops.length; i++) {
+            if (!state.bezorgStatus[stops[i].id]) { state.bezorgIdx = i; break; }
+        }
+        updateBsScherm();
+    }
+
+    // Swipe links/rechts op compact scherm
+    let touchStartX = 0;
+    bezorgScherm.addEventListener('touchstart', e => { touchStartX = e.touches[0].clientX; }, { passive: true });
+    bezorgScherm.addEventListener('touchend', e => {
+        const dx = e.changedTouches[0].clientX - touchStartX;
+        if (Math.abs(dx) > 50) {
+            state.bezorgIdx = dx < 0
+                ? Math.min(state.bezorgOrder.length - 1, state.bezorgIdx + 1)
+                : Math.max(0, state.bezorgIdx - 1);
+            updateBsScherm();
+        }
+    });
+
+    // Eindsamenvatting
+    function toonEindSamenvatting() {
+        const totaal    = state.stops.length;
+        const bezorgd   = Object.values(state.bezorgStatus).filter(s => s === 'bezorgd').length;
+        const nietThuis = state.bezorgOrder.filter(s => state.bezorgStatus[s.id] === 'niet-thuis');
+        const minuten   = state.bezorgStart ? Math.floor((Date.now() - state.bezorgStart) / 60000) : 0;
+        const uur = Math.floor(minuten / 60), min = minuten % 60;
+        const tijdTekst = uur > 0 ? `${uur}u ${min}min` : `${min} min`;
+
+        document.getElementById('eind-stats').innerHTML =
+            `<p>✅ <strong>Bezorgd:</strong> ${bezorgd} van ${totaal}</p>` +
+            `<p>⏱️ <strong>Tijd:</strong> ${tijdTekst}</p>`;
+
+        const ntEl = document.getElementById('eind-niet-thuis');
+        if (nietThuis.length) {
+            ntEl.innerHTML = `<p><strong>❌ Niet thuis (${nietThuis.length}):</strong></p>` +
+                nietThuis.map(s => `<p style="margin:2px 0 2px 12px;">• ${escapeHtml(s.name)}</p>`).join('');
+        } else {
+            ntEl.innerHTML = '<p style="color:#10b981;">🎉 Alles bezorgd!</p>';
+        }
+        bezorgScherm.classList.add('hidden');
+        eindModal.classList.remove('hidden');
+    }
+
+    document.getElementById('eind-kopieer').addEventListener('click', () => {
+        const nietThuis = state.bezorgOrder.filter(s => state.bezorgStatus[s.id] === 'niet-thuis');
+        const tekst = 'NIET THUIS:\n' + (nietThuis.length
+            ? nietThuis.map(s => '• ' + s.name).join('\n')
+            : 'Geen');
+        navigator.clipboard.writeText(tekst);
+    });
+    document.getElementById('eind-sluiten').addEventListener('click', () => {
+        eindModal.classList.add('hidden');
+        stopBezorgModus();
+    });
 
     // Route opslaan & laden
     const savedRoutesSelect = document.getElementById('saved-routes-select');

@@ -115,11 +115,56 @@
                         <span id="total-stops" class="stat-value">-</span>
                     </div>
                 </div>
+                <!-- Bezorg-voortgang (zichtbaar in bezorg-modus) -->
+                <div id="bezorg-progress" class="hidden" style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:12px;margin-bottom:10px;text-align:center;">
+                    <div id="bezorg-counter" style="font-size:18px;font-weight:700;color:#10b981;"></div>
+                    <div id="bezorg-timer"   style="font-size:12px;color:#6b7280;margin-top:2px;"></div>
+                    <div style="background:#d1fae5;border-radius:6px;height:8px;margin-top:8px;">
+                        <div id="bezorg-bar" style="background:#10b981;height:100%;border-radius:6px;width:0%;transition:width 0.4s;"></div>
+                    </div>
+                </div>
                 <div id="route-steps" class="route-steps"></div>
+                <button id="bezorg-btn" class="btn-primary" style="margin-top:10px;width:100%;display:none;">&#128666; Start bezorging</button>
+                <button id="bezorg-stop-btn" class="btn-secondary" style="margin-top:6px;width:100%;display:none;">&#9209; Stop bezorging</button>
                 <button id="copy-route-btn" class="btn-secondary" style="margin-top: 12px; width: 100%;">&#128203; Route kopiëren</button>
                 <button id="print-route-btn" class="btn-secondary" style="margin-top: 6px; width: 100%;">&#128438; Route afdrukken</button>
                 <div id="maps-route-btns" style="margin-top: 8px;"></div>
             </div>
+
+        <!-- Compact fullscreen bezorgscherm (mobiel) -->
+        <div id="bezorg-scherm" class="hidden">
+            <div id="bezorg-scherm-header">
+                <div id="bs-counter"></div>
+                <div id="bs-timer"></div>
+                <div id="bs-bar-wrap"><div id="bs-bar"></div></div>
+            </div>
+            <div id="bs-nav">
+                <button id="bs-prev">&#8592;</button>
+                <span id="bs-idx"></span>
+                <button id="bs-next">&#8594;</button>
+            </div>
+            <div id="bs-adres"></div>
+            <div id="bs-acties">
+                <button id="bs-bezorgd">&#10003; BEZORGD</button>
+                <button id="bs-niet-thuis">&#10007; NIET THUIS</button>
+            </div>
+            <button id="bs-notitie">&#128221; Notitie</button>
+            <div id="bs-note-text"></div>
+            <button id="bs-sluiten" class="btn-secondary">&#8592; Terug naar overzicht</button>
+        </div>
+
+        <!-- Eindsamenvatting modal -->
+        <div id="eind-modal" class="modal hidden">
+            <div class="modal-content" style="text-align:center;">
+                <h2 style="margin-bottom:8px;">&#127881; Route voltooid!</h2>
+                <div id="eind-stats" style="margin:16px 0;text-align:left;"></div>
+                <div id="eind-niet-thuis" style="margin-bottom:16px;text-align:left;"></div>
+                <div style="display:flex;gap:8px;">
+                    <button id="eind-kopieer" class="btn-secondary" style="flex:1;">&#128203; Kopieer lijst</button>
+                    <button id="eind-sluiten" class="btn-primary"    style="flex:1;">&#10003; Klaar</button>
+                </div>
+            </div>
+        </div>
         </aside>
 
         <div id="map"></div>
