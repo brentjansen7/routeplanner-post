@@ -6,18 +6,8 @@
 (function () {
     'use strict';
 
-    const GEMINI_MODEL = 'gemini-2.5-flash';
-    const LS_API_KEY   = 'geminiApiKey';
-    const LS_WACHTRIJ  = 'scanWachtrij';
-
-    // --- DOM refs ---
-    const apiInvoerWrap     = document.getElementById('api-invoer-wrap');
-    const apiOpgeslagenWrap = document.getElementById('api-opgeslagen-wrap');
-    const apiKeyInput       = document.getElementById('api-key-input');
-    const apiOpslaan        = document.getElementById('api-opslaan');
-    const apiWijzig         = document.getElementById('api-wijzig');
-    const apiKeyPreview     = document.getElementById('api-key-preview');
-    const apiStatus         = document.getElementById('api-status');
+    const PROXY_URL   = 'https://gemini-proxy.brent-jansen2009.workers.dev';
+    const LS_WACHTRIJ = 'scanWachtrij';
 
     const cameraBtn     = document.getElementById('camera-btn');
     const gallerijBtn   = document.getElementById('gallerij-btn');
@@ -43,42 +33,6 @@
     let huidigeFoto = null;      // base64 string zonder prefix
     let huidigeMime = 'image/jpeg';
     let gevondenAdressen = [];   // [{ tekst, geselecteerd }]
-
-    // ============================================================
-    // API sleutel beheer
-    // ============================================================
-
-    function toonApiStatus() {
-        const key = localStorage.getItem(LS_API_KEY);
-        if (key) {
-            apiInvoerWrap.style.display = 'none';
-            apiOpgeslagenWrap.style.display = 'block';
-            apiKeyPreview.textContent = key.slice(0, 8) + '••••••••' + key.slice(-4);
-        } else {
-            apiInvoerWrap.style.display = 'block';
-            apiOpgeslagenWrap.style.display = 'none';
-        }
-    }
-
-    apiOpslaan.addEventListener('click', () => {
-        const key = apiKeyInput.value.trim();
-        if (!key.startsWith('AIza') || key.length < 20) {
-            apiStatus.className = 'fout';
-            apiStatus.textContent = 'Ongeldige sleutel. Begin met AIzaSy...';
-            return;
-        }
-        localStorage.setItem(LS_API_KEY, key);
-        apiStatus.className = 'ok';
-        apiStatus.textContent = '✓ Sleutel opgeslagen';
-        setTimeout(() => { apiStatus.textContent = ''; toonApiStatus(); }, 1500);
-    });
-
-    apiWijzig.addEventListener('click', () => {
-        apiInvoerWrap.style.display = 'block';
-        apiOpgeslagenWrap.style.display = 'none';
-        apiKeyInput.value = localStorage.getItem(LS_API_KEY) || '';
-        apiKeyInput.focus();
-    });
 
     // ============================================================
     // Foto verwerking
@@ -117,12 +71,6 @@
     // ============================================================
 
     async function scanMetGemini() {
-        const apiKey = localStorage.getItem(LS_API_KEY);
-        if (!apiKey) {
-            scanStatus.className = 'fout';
-            scanStatus.textContent = '⚠️ Sla eerst een API-sleutel op.';
-            return;
-        }
         if (!huidigeFoto) {
             scanStatus.className = 'fout';
             scanStatus.textContent = '⚠️ Maak eerst een foto.';
@@ -144,10 +92,8 @@ Lavendel 63, 2925 XE Krimpen aan den IJssel
 Als er meerdere bezorgadressen op de foto staan, geef ze allemaal op aparte regels.
 Geef GEEN afzendadres, GEEN namen, GEEN extra uitleg. Alleen het adres.`;
 
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
-
         try {
-            const resp = await fetch(url, {
+            const resp = await fetch(PROXY_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -167,9 +113,6 @@ Geef GEEN afzendadres, GEEN namen, GEEN extra uitleg. Alleen het adres.`;
                 if (resp.status === 429) {
                     scanStatus.className = 'fout';
                     scanStatus.textContent = '⏳ Te veel verzoeken. Wacht even en probeer opnieuw.';
-                } else if (resp.status === 400 && msg.includes('API_KEY')) {
-                    scanStatus.className = 'fout';
-                    scanStatus.textContent = '🔑 API-sleutel ongeldig. Controleer je sleutel.';
                 } else {
                     scanStatus.className = 'fout';
                     scanStatus.textContent = `❌ Fout: ${msg}`;
@@ -216,7 +159,7 @@ Geef GEEN afzendadres, GEEN namen, GEEN extra uitleg. Alleen het adres.`;
     function toonResultaten() {
         adresLijst.innerHTML = '';
 
-        gevondenAdressen.forEach((adres, i) => {
+        gevondenAdressen.forEach((adres) => {
             const li = document.createElement('li');
             li.className = 'adres-item' + (adres.geselecteerd ? ' geselecteerd' : '');
             li.innerHTML = `
@@ -322,7 +265,6 @@ Geef GEEN afzendadres, GEEN namen, GEEN extra uitleg. Alleen het adres.`;
     // ============================================================
     // Init
     // ============================================================
-    toonApiStatus();
     updateWachtrijUI();
 
 })();
