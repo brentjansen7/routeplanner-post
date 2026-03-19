@@ -223,9 +223,18 @@
             <button id="gallerij-btn">🖼️ Galerij</button>
         </div>
         <input type="file" id="camera-input" accept="image/*" capture="environment" />
-        <input type="file" id="gallerij-input" accept="image/*" />
+        <input type="file" id="gallerij-input" accept="image/*" multiple />
 
         <button id="analyseer-btn">🔍 Analyseer adres</button>
+
+        <!-- Voortgangsbalk (meerdere foto's) -->
+        <div id="scan-progress" style="display:none;">
+            <div style="background:#e0e7ff;border-radius:8px;height:10px;overflow:hidden;">
+                <div id="scan-progress-bar" style="background:#4361ee;height:100%;width:0%;transition:width 0.4s;border-radius:8px;"></div>
+            </div>
+            <p id="scan-progress-tekst" style="font-size:13px;color:#4361ee;margin-top:6px;text-align:center;"></p>
+        </div>
+
         <div id="scan-status"></div>
     </div>
 
