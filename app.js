@@ -766,36 +766,6 @@
     }
 
     // --- Bezorger-routes weergeven in samenvatting ---
-    function renderCourierRoutes() {
-        const container = document.getElementById('courier-routes');
-        if (!container) return;
-        if (!state.courierRoutes || state.courierRoutes.length <= 1) {
-            container.innerHTML = '';
-            return;
-        }
-        const samenvatting = genereerBezorgerSamenvatting(state.courierRoutes);
-        container.innerHTML = `
-            <h3 style="margin:8px 0 6px;font-size:14px;font-weight:700;">
-                Verdeling over ${samenvatting.length} bezorgers
-            </h3>
-            ${samenvatting.map((b, i) => `
-                <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:8px;margin-bottom:4px;background:${b.kleur}15;border-left:3px solid ${b.kleur};">
-                    <span style="font-weight:700;color:${b.kleur};min-width:80px;">Bezorger ${b.nummer}</span>
-                    <span style="font-size:13px;color:#555;">${b.aantalStops} stops</span>
-                    <button class="start-bezorger-btn" data-idx="${i}" style="margin-left:auto;padding:4px 10px;background:${b.kleur};color:white;border:none;border-radius:6px;cursor:pointer;font-size:12px;">&#128666; Start</button>
-                </div>
-            `).join('')}
-        `;
-        container.querySelectorAll('.start-bezorger-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const idx = parseInt(btn.dataset.idx);
-                state.activeCourier = idx;
-                state.bezorgOrder = state.courierRoutes[idx].slice();
-                startBezorgModus();
-            });
-        });
-    }
-
     // --- Route optimization ---
 
     // Parse Dutch address into street name + house number
@@ -1761,6 +1731,149 @@
         }
     });
 
+    // ================================================================
+    // Gedeelde bezorger-links (URL-gebaseerd, geen server nodig)
+    // ================================================================
+
+    // Encodeer stops naar een deelbare URL voor één bezorger
+    function encodeStopsToURL(stops, courierIdx) {
+        const compact = stops.map(s => [
+            parseFloat(s.lat.toFixed(5)),
+            parseFloat(s.lng.toFixed(5)),
+            s.name,
+        ]);
+        const json = JSON.stringify(compact);
+        // URL-safe base64 (werkt ook met bijv. é, ë in straatnamen)
+        const encoded = btoa(unescape(encodeURIComponent(json)))
+            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+        return `${location.origin}${location.pathname}?bezorger=${courierIdx + 1}&route=${encoded}`;
+    }
+
+    // Lees stops uit de URL als die aanwezig zijn
+    function decodeStopsFromURL() {
+        const params = new URLSearchParams(location.search);
+        const encoded = params.get('route');
+        if (!encoded) return null;
+        try {
+            const b64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
+            const padded = b64 + '=='.slice(0, (4 - b64.length % 4) % 4);
+            const json = decodeURIComponent(escape(atob(padded)));
+            const compact = JSON.parse(json);
+            return {
+                stops: compact.map(([lat, lng, name]) => ({ lat, lng, name })),
+                bezorger: parseInt(params.get('bezorger')) || 1,
+            };
+        } catch (e) {
+            console.error('Route URL decode mislukt:', e);
+            return null;
+        }
+    }
+
+    // Laad gedeelde route uit URL (voor bezorger die de link opent)
+    function loadSharedRoute() {
+        const data = decodeStopsFromURL();
+        if (!data) return;
+
+        // Verwijder ?route=... uit de URL zodat refreshen geen problemen geeft
+        history.replaceState({}, '', location.pathname);
+
+        data.stops.forEach(s => addMarker(s.lat, s.lng, s.name));
+
+        // Toon banner
+        const banner = document.getElementById('shared-route-banner');
+        if (banner) {
+            banner.textContent = `Bezorger ${data.bezorger} — ${data.stops.length} stops geladen`;
+            banner.style.display = '';
+        }
+
+        // Pas kaart aan op de stops
+        setTimeout(fitMapToStops, 300);
+    }
+
+    // --- Bezorger-routes weergeven inclusief deelknoppen ---
+    function renderCourierRoutes() {
+        const container = document.getElementById('courier-routes');
+        if (!container) return;
+        if (!state.courierRoutes || state.courierRoutes.length <= 1) {
+            container.innerHTML = '';
+            return;
+        }
+        const samenvatting = genereerBezorgerSamenvatting(state.courierRoutes);
+
+        container.innerHTML = `
+            <h3 style="margin:8px 0 6px;font-size:14px;font-weight:700;">
+                Verdeling over ${samenvatting.length} bezorgers
+            </h3>
+            ${samenvatting.map((b, i) => {
+                const url = encodeStopsToURL(b.stops, i);
+                const qrUrl = url.length <= 2500
+                    ? `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(url)}`
+                    : null;
+                return `
+                <div style="border-radius:10px;margin-bottom:8px;background:${b.kleur}12;border:1px solid ${b.kleur}40;overflow:hidden;">
+                    <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;">
+                        <span style="font-weight:700;color:${b.kleur};">Bezorger ${b.nummer}</span>
+                        <span style="font-size:13px;color:#555;">${b.aantalStops} stops</span>
+                        <button class="start-bezorger-btn" data-idx="${i}"
+                            style="margin-left:auto;padding:5px 10px;background:${b.kleur};color:white;border:none;border-radius:6px;cursor:pointer;font-size:12px;">
+                            &#128666; Start
+                        </button>
+                    </div>
+                    <div style="display:flex;gap:6px;padding:0 10px 10px;flex-wrap:wrap;align-items:flex-start;">
+                        <button class="kopieer-link-btn" data-url="${escapeHtml(url)}"
+                            style="padding:5px 10px;background:#f0f0f0;border:1px solid #ddd;border-radius:6px;cursor:pointer;font-size:12px;flex:1;min-width:120px;">
+                            &#128203; Kopieer link
+                        </button>
+                        ${qrUrl ? `
+                        <button class="toon-qr-btn" data-qr="${escapeHtml(qrUrl)}"
+                            style="padding:5px 10px;background:#f0f0f0;border:1px solid #ddd;border-radius:6px;cursor:pointer;font-size:12px;">
+                            &#9636; QR-code
+                        </button>
+                        ` : ''}
+                    </div>
+                    <div class="qr-container" style="display:none;padding:0 10px 10px;text-align:center;"></div>
+                </div>
+                `;
+            }).join('')}
+        `;
+
+        // Event listeners
+        container.querySelectorAll('.start-bezorger-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const idx = parseInt(btn.dataset.idx);
+                state.activeCourier = idx;
+                state.bezorgOrder = state.courierRoutes[idx].slice();
+                startBezorgModus();
+            });
+        });
+
+        container.querySelectorAll('.kopieer-link-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                navigator.clipboard.writeText(btn.dataset.url).then(() => {
+                    const orig = btn.textContent;
+                    btn.textContent = '✓ Gekopieerd!';
+                    setTimeout(() => { btn.textContent = orig; }, 2000);
+                });
+            });
+        });
+
+        container.querySelectorAll('.toon-qr-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const qrDiv = btn.closest('div[style]').nextElementSibling;
+                if (qrDiv.style.display === 'none') {
+                    qrDiv.style.display = '';
+                    qrDiv.innerHTML = `<img src="${btn.dataset.qr}" alt="QR code bezorger"
+                        style="border-radius:8px;border:1px solid #ddd;" />
+                        <p style="font-size:11px;color:#888;margin:4px 0 0;">Laat bezorger scannen</p>`;
+                    btn.textContent = '✕ Verberg QR';
+                } else {
+                    qrDiv.style.display = 'none';
+                    btn.textContent = '⬛ QR-code';
+                }
+            });
+        });
+    }
+
     // --- Auto-import vanuit scan-pagina ---
     function checkScanWachtrij() {
         if (!window.location.hash.includes('import-scan')) return;
@@ -1775,5 +1888,6 @@
         } catch (e) { /* ignore */ }
     }
     checkScanWachtrij();
+    loadSharedRoute();
 
 })();
