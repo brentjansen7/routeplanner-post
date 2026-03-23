@@ -1,4 +1,4 @@
-const CACHE = 'route-optimizer-v5';
+const CACHE = 'route-optimizer-v6';
 const ASSETS = [
   '/routeplanner-post/',
   '/routeplanner-post/index.html',
@@ -7,6 +7,10 @@ const ASSETS = [
   '/routeplanner-post/scan.css',
   '/routeplanner-post/app.js',
   '/routeplanner-post/scan.js',
+  '/routeplanner-post/cluster.js',
+  '/routeplanner-post/split.js',
+  '/routeplanner-post/import.js',
+  '/routeplanner-post/tsp-worker.js',
   '/routeplanner-post/manifest.json',
   '/routeplanner-post/icon-192.svg',
   '/routeplanner-post/icon-512.svg',

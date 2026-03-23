@@ -152,43 +152,51 @@ Geef GEEN afzendadres, GEEN namen, GEEN extra uitleg. Alleen het adres.`;
 
         let fouten = 0;
 
-        for (let i = 0; i < totaal; i++) {
-            const file = geselecteerdeFiles[i];
+        // Verwerk in batches van 3 parallel (3× sneller dan sequentieel)
+        const batchSize = 3;
+        for (let i = 0; i < totaal; i += batchSize) {
+            const batch = geselecteerdeFiles.slice(i, i + batchSize);
 
-            // Progress bijwerken
+            // Progress bijwerken naar eerste van deze batch
             const pct = Math.round((i / totaal) * 100);
             scanProgressBar.style.width = pct + '%';
             scanProgressTekst.textContent =
-                `Foto ${i + 1} van ${totaal} wordt gescand...`;
+                `Foto ${i + 1}–${Math.min(i + batchSize, totaal)} van ${totaal} worden gescand...`;
 
-            // Preview bijwerken naar huidige foto
-            const dataUrl = await new Promise(r => {
+            // Preview bijwerken naar eerste foto van de batch
+            const previewDataUrl = await new Promise(r => {
                 const rd = new FileReader();
                 rd.onload = e => r(e.target.result);
-                rd.readAsDataURL(file);
+                rd.readAsDataURL(batch[0]);
             });
-            fotoPreview.src = dataUrl;
+            fotoPreview.src = previewDataUrl;
 
-            try {
-                const { data, mime } = await leesBase64(file);
-                const tekst = await scanEenFoto(data, mime);
+            // Scan de batch parallel
+            const batchResultaten = await Promise.all(batch.map(async file => {
+                try {
+                    const { data, mime } = await leesBase64(file);
+                    return await scanEenFoto(data, mime);
+                } catch (e) {
+                    fouten++;
+                    return '';
+                }
+            }));
 
-                const regels = tekst.split('\n')
+            // Verwerk gevonden adressen
+            for (const tekst of batchResultaten) {
+                if (!tekst) continue;
+                tekst.split('\n')
                     .map(r => r.trim())
-                    .filter(r => r.length > 5 && /\d/.test(r));
-
-                regels.forEach(r => {
-                    if (!gevondenAdressen.find(a => a.tekst === r)) {
-                        gevondenAdressen.push({ tekst: r, geselecteerd: true });
-                    }
-                });
-
-            } catch (e) {
-                fouten++;
+                    .filter(r => r.length > 5 && /\d/.test(r))
+                    .forEach(r => {
+                        if (!gevondenAdressen.find(a => a.tekst === r)) {
+                            gevondenAdressen.push({ tekst: r, geselecteerd: true });
+                        }
+                    });
             }
 
-            // Kleine pauze tussen verzoeken (rate limit)
-            if (i < totaal - 1) {
+            // Pauze tussen batches (rate limit)
+            if (i + batchSize < totaal) {
                 await new Promise(r => setTimeout(r, 2000));
             }
         }

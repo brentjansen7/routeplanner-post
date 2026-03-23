@@ -11,6 +11,15 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="RouteApp" />
     <link rel="apple-touch-icon" href="icon-192.png" />
+    <style>
+        .import-tab {
+            flex: 1; padding: 7px 12px; border: 1px solid #ddd; background: #f5f5f5;
+            cursor: pointer; font-size: 13px; transition: background 0.15s;
+        }
+        .import-tab:first-child { border-radius: 8px 0 0 8px; border-right: none; }
+        .import-tab:last-child  { border-radius: 0 8px 8px 0; }
+        .import-tab-active { background: #4361ee; color: white; border-color: #4361ee; }
+    </style>
 </head>
 <body>
     <div id="app">
@@ -41,8 +50,22 @@
                             <label for="import-city">Plaats (optioneel):</label>
                             <input type="text" id="import-city" placeholder="bijv. Veenendaal" autocomplete="off" />
                         </div>
-                        <p>Eén adres per regel:</p>
-                        <textarea id="import-textarea" rows="8" placeholder="Lavendel 63&#10;Lavendel 65&#10;Vijverlaan 12&#10;De Brink 4"></textarea>
+                        <div style="display:flex;gap:0;margin-bottom:8px;">
+                            <button id="import-tab-tekst" class="import-tab import-tab-active" type="button">Tekst</button>
+                            <button id="import-tab-csv"   class="import-tab" type="button">CSV / Excel</button>
+                        </div>
+                        <div id="import-panel-tekst">
+                            <p>Eén adres per regel:</p>
+                            <textarea id="import-textarea" rows="8" placeholder="Lavendel 63&#10;Lavendel 65&#10;Vijverlaan 12&#10;De Brink 4"></textarea>
+                        </div>
+                        <div id="import-panel-csv" style="display:none;">
+                            <p style="font-size:12px;color:#666;margin-bottom:8px;">
+                                Kies een CSV of Excel-bestand. Kolommen: <em>straat, huisnummer, postcode, plaats</em>
+                                (of <em>lat, lng</em> voor directe coördinaten).
+                            </p>
+                            <input type="file" id="import-file" accept=".csv,.xlsx,.xls,.txt"
+                                style="width:100%;padding:8px;border:1px dashed #aaa;border-radius:8px;cursor:pointer;" />
+                        </div>
                         <div id="import-progress" class="hidden" style="margin-top:10px;">
                             <div style="background:#e0e7ff; border-radius:6px; height:8px;">
                                 <div id="import-progress-fill" style="background:#4f6ef7; height:100%; border-radius:6px; width:0%; transition:width 0.3s;"></div>
@@ -81,6 +104,14 @@
                         <input type="checkbox" id="round-trip" />
                         <span>Rondje (start = eind)</span>
                     </label>
+                </div>
+                <div class="option-group">
+                    <label class="option-label">Bezorgers</label>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <input type="number" id="courier-count" min="1" max="10" value="1"
+                            style="width:60px;padding:6px;border:1px solid #ddd;border-radius:8px;font-size:14px;text-align:center;" />
+                        <span style="font-size:13px;color:#555;">bezorger(s)</span>
+                    </div>
                 </div>
             </div>
 
@@ -123,6 +154,7 @@
                         <div id="bezorg-bar" style="background:#10b981;height:100%;border-radius:6px;width:0%;transition:width 0.4s;"></div>
                     </div>
                 </div>
+                <div id="courier-routes" style="margin-bottom:8px;"></div>
                 <div id="route-steps" class="route-steps"></div>
                 <button id="bezorg-btn" class="btn-primary" style="margin-top:10px;width:100%;display:none;">&#128666; Start bezorging</button>
                 <button id="bezorg-stop-btn" class="btn-secondary" style="margin-top:6px;width:100%;display:none;">&#9209; Stop bezorging</button>
@@ -176,7 +208,35 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Excel-import (optioneel: SheetJS CDN) -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" onerror="console.info('SheetJS niet geladen — Excel-import niet beschikbaar')"></script>
+    <script src="cluster.js"></script>
+    <script src="split.js"></script>
+    <script src="import.js"></script>
     <script src="app.js"></script>
+    <script>
+        // Tab-wissel in import modal
+        document.addEventListener('DOMContentLoaded', () => {
+            const tabTekst = document.getElementById('import-tab-tekst');
+            const tabCsv   = document.getElementById('import-tab-csv');
+            const panelTekst = document.getElementById('import-panel-tekst');
+            const panelCsv   = document.getElementById('import-panel-csv');
+            if (tabTekst && tabCsv) {
+                tabTekst.addEventListener('click', () => {
+                    panelTekst.style.display = '';
+                    panelCsv.style.display   = 'none';
+                    tabTekst.classList.add('import-tab-active');
+                    tabCsv.classList.remove('import-tab-active');
+                });
+                tabCsv.addEventListener('click', () => {
+                    panelTekst.style.display = 'none';
+                    panelCsv.style.display   = '';
+                    tabCsv.classList.add('import-tab-active');
+                    tabTekst.classList.remove('import-tab-active');
+                });
+            }
+        });
+    </script>
     <script>
       if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
     </script>

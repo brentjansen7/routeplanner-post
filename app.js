@@ -22,6 +22,11 @@
         bezorgStart:  null, // Date
         bezorgOrder:  [],   // geoptimaliseerde volgorde (array van stop-objecten)
         bezorgIdx:    0,    // huidig stop-index in compact scherm
+        // Multi-bezorger
+        courierCount: 1,
+        courierRoutes: [],
+        courierClusterLabels: null,
+        activeCourier: 0,
     };
 
     // --- Map setup ---
@@ -60,6 +65,8 @@
     const roundTripCheckbox = document.getElementById('round-trip');
     const copyRouteBtn   = document.getElementById('copy-route-btn');
     const mapsRouteBtns  = document.getElementById('maps-route-btns');
+    const courierCountInput = document.getElementById('courier-count');
+    const importFileInput   = document.getElementById('import-file');
 
     // --- Marker creation ---
     function createNumberedIcon(number, total) {
@@ -717,6 +724,78 @@
         return globalBest;
     }
 
+    // --- Web Worker wrapper voor TSP (geen UI-bevriezing) ---
+    function solveTSPAsync(distances, roundTrip) {
+        return new Promise((resolve, reject) => {
+            try {
+                const worker = new Worker('tsp-worker.js');
+                worker.onmessage = e => { worker.terminate(); resolve(e.data.order); };
+                worker.onerror = e => { worker.terminate(); reject(e); };
+                worker.postMessage({ distances, roundTrip });
+            } catch (e) {
+                // Fallback als Web Workers niet beschikbaar zijn
+                resolve(solveTSP(distances));
+            }
+        });
+    }
+
+    // --- Grote routes: clustering + per-cluster TSP ---
+    async function optimizeWithClustering(routingStops) {
+        const k = clusterCount(routingStops.length);
+        // Voeg tijdelijke _origIdx toe om originele indices te bewaren
+        const stopsWithIdx = routingStops.map((s, i) => ({ ...s, _origIdx: i }));
+        const clusters = splitIntoClusters(stopsWithIdx, k);
+        const orderedClusters = orderClusters(clusters);
+
+        const globalOrder = [];
+        const clusterLabelsArr = [];
+        let clusterIdx = 0;
+
+        for (const cluster of orderedClusters) {
+            const origIndices = cluster.map(s => s._origIdx);
+            const clusterStops = origIndices.map(i => routingStops[i]);
+            const matrix = await getDistanceMatrix(clusterStops);
+            const localOrder = await solveTSPAsync(matrix.durations, state.roundTrip);
+            for (const localIdx of localOrder) {
+                globalOrder.push(origIndices[localIdx]);
+                clusterLabelsArr.push(clusterIdx);
+            }
+            clusterIdx++;
+        }
+        return { order: globalOrder, clusterLabels: clusterLabelsArr };
+    }
+
+    // --- Bezorger-routes weergeven in samenvatting ---
+    function renderCourierRoutes() {
+        const container = document.getElementById('courier-routes');
+        if (!container) return;
+        if (!state.courierRoutes || state.courierRoutes.length <= 1) {
+            container.innerHTML = '';
+            return;
+        }
+        const samenvatting = genereerBezorgerSamenvatting(state.courierRoutes);
+        container.innerHTML = `
+            <h3 style="margin:8px 0 6px;font-size:14px;font-weight:700;">
+                Verdeling over ${samenvatting.length} bezorgers
+            </h3>
+            ${samenvatting.map((b, i) => `
+                <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:8px;margin-bottom:4px;background:${b.kleur}15;border-left:3px solid ${b.kleur};">
+                    <span style="font-weight:700;color:${b.kleur};min-width:80px;">Bezorger ${b.nummer}</span>
+                    <span style="font-size:13px;color:#555;">${b.aantalStops} stops</span>
+                    <button class="start-bezorger-btn" data-idx="${i}" style="margin-left:auto;padding:4px 10px;background:${b.kleur};color:white;border:none;border-radius:6px;cursor:pointer;font-size:12px;">&#128666; Start</button>
+                </div>
+            `).join('')}
+        `;
+        container.querySelectorAll('.start-bezorger-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const idx = parseInt(btn.dataset.idx);
+                state.activeCourier = idx;
+                state.bezorgOrder = state.courierRoutes[idx].slice();
+                startBezorgModus();
+            });
+        });
+    }
+
     // --- Route optimization ---
 
     // Parse Dutch address into street name + house number
@@ -890,11 +969,22 @@
                 }))
                 : state.stops;
 
-            // Get distance matrix using delivery-side waypoints
-            const matrix = await getDistanceMatrix(routingStops);
-
-            // Solve TSP using durations
-            const optimalOrder = solveTSP(matrix.durations);
+            // Kies optimalisatiestrategie op basis van aantal stops
+            let optimalOrder, matrix, clusterLabels;
+            if (state.stops.length > 40) {
+                // Grote route: eerst clusteren, dan per cluster TSP via worker
+                const result = await optimizeWithClustering(routingStops);
+                optimalOrder = result.order;
+                clusterLabels = result.clusterLabels;
+                // Haversine matrix voor samenvatting (per-stap afstanden)
+                matrix = buildHaversineMatrix(routingStops);
+            } else {
+                // Kleine route: directe matrix + TSP via web worker
+                matrix = await getDistanceMatrix(routingStops);
+                optimalOrder = await solveTSPAsync(matrix.durations, state.roundTrip);
+                clusterLabels = null;
+            }
+            state.courierClusterLabels = clusterLabels;
 
             // Reorder stops and delivery points together
             const reordered = optimalOrder.map(i => state.stops[i]);
@@ -902,6 +992,15 @@
                 ? optimalOrder.map(i => deliveryPoints[i])
                 : null;
             state.stops = reordered;
+
+            // Splitsing over meerdere bezorgers
+            const courierCount = courierCountInput ? (parseInt(courierCountInput.value) || 1) : 1;
+            state.courierCount = courierCount;
+            if (courierCount > 1) {
+                state.courierRoutes = splitRouteAmongCouriers(state.stops, courierCount, state.courierClusterLabels);
+            } else {
+                state.courierRoutes = [];
+            }
 
             updateMarkerIcons();
             renderStopsList();
@@ -1067,11 +1166,14 @@
 
         routeSummary.classList.remove('hidden');
         renderMapsButtons();
+        renderCourierRoutes();
 
         // Bezorg-modus: sla volgorde op en toon Start-knop
         state.bezorgOrder = state.stops.slice();
         const _bezorgBtn = document.getElementById('bezorg-btn');
-        if (_bezorgBtn && !state.bezorgModus) _bezorgBtn.style.display = '';
+        if (_bezorgBtn && !state.bezorgModus) {
+            _bezorgBtn.style.display = state.courierRoutes.length > 1 ? 'none' : '';
+        }
     }
 
     // --- Loading ---
@@ -1320,7 +1422,7 @@
         herenderBezorg();
     }
 
-    bezorgBtn.addEventListener('click', () => {
+    function startBezorgModus() {
         state.bezorgModus  = true;
         state.bezorgStart  = Date.now();
         state.bezorgStatus = {};
@@ -1333,6 +1435,12 @@
         herenderBezorg();
         bezorgScherm.classList.remove('hidden'); // direct fullscreen
         updateBsScherm();
+    }
+
+    bezorgBtn.addEventListener('click', () => {
+        state.bezorgOrder = state.stops.slice();
+        state.activeCourier = 0;
+        startBezorgModus();
     });
 
     bezorgStopBtn.addEventListener('click', () => {
@@ -1549,6 +1657,44 @@
 
     importConfirm.addEventListener('click', async () => {
         const city = importCity.value.trim();
+
+        // --- CSV/Excel bestand pad ---
+        if (importFileInput && importFileInput.files && importFileInput.files.length > 0) {
+            const file = importFileInput.files[0];
+            importModal.classList.add('hidden');
+            const progressEl   = document.getElementById('import-progress');
+            const progressFill = document.getElementById('import-progress-fill');
+            const progressText = document.getElementById('import-progress-text');
+            progressEl.classList.remove('hidden');
+            importModal.classList.remove('hidden');
+
+            progressText.textContent = 'Bestand inlezen...';
+            const result = await importFromFile(file, city, (done, total, fase) => {
+                const pct = Math.round(done / total * 100);
+                progressFill.style.width = pct + '%';
+                progressText.textContent = fase === 'geocode'
+                    ? `Geocoderen ${done} van ${total}...`
+                    : `Verwerken ${done} van ${total}...`;
+            });
+
+            if (result.error) {
+                progressEl.classList.add('hidden');
+                importModal.classList.add('hidden');
+                alert(result.error);
+                return;
+            }
+
+            result.stops.forEach(s => addMarker(s.lat, s.lng, s.name));
+            progressEl.classList.add('hidden');
+            importModal.classList.add('hidden');
+            importFileInput.value = '';
+            if (result.failed && result.failed.length > 0) {
+                alert(`${result.stops.length} stops toegevoegd.\n\nNiet gevonden:\n${result.failed.join('\n')}`);
+            }
+            return;
+        }
+
+        // --- Tekst import pad (ongewijzigd) ---
         const lines = importTextarea.value.split('\n').map(l => l.trim()).filter(l => l.length > 0);
         if (lines.length === 0) return;
 
