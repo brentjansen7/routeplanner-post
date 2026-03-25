@@ -405,12 +405,18 @@
 
     // --- Distance Matrix (BRouter for bike/foot, OSRM for driving) ---
     async function getDistanceMatrix(stops) {
-        // For cycling/walking: use BRouter which knows about bike paths & footpaths
+        // For cycling/walking: use BRouter only for small sets (≤12 stops)
+        // For larger sets BRouter needs n*(n-1) requests which takes too long — use Haversine instead
         if (brouterProfile()) {
-            try {
-                return await brouterDistanceMatrix(stops);
-            } catch (err) {
-                console.warn('BRouter matrix failed, trying OSRM fallback:', err);
+            if (stops.length <= 12) {
+                try {
+                    return await brouterDistanceMatrix(stops);
+                } catch (err) {
+                    console.warn('BRouter matrix failed, using Haversine fallback:', err);
+                }
+            } else {
+                console.log(`Distance matrix: ${stops.length} stops in fiets/lopen modus → Haversine (BRouter zou te lang duren)`);
+                return buildHaversineMatrix(stops);
             }
         }
 
