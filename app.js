@@ -6,6 +6,14 @@
 (function () {
     'use strict';
 
+    // --- Fetch met timeout helper ---
+    function fetchWithTimeout(url, options = {}, ms = 12000) {
+        const ctrl = new AbortController();
+        const id = setTimeout(() => ctrl.abort(), ms);
+        return fetch(url, { ...options, signal: ctrl.signal })
+            .finally(() => clearTimeout(id));
+    }
+
     // --- State ---
     const state = {
         stops: [],          // { id, name, lat, lng, marker }
@@ -334,7 +342,7 @@
     async function brouterPairRoute(from, to, profile) {
         const lonlats = `${from.lng},${from.lat}|${to.lng},${to.lat}`;
         const url = `https://brouter.de/brouter?lonlats=${lonlats}&profile=${profile}&alternativeidx=0&format=geojson`;
-        const res = await fetch(url);
+        const res = await fetchWithTimeout(url, {}, 12000);
         if (!res.ok) throw new Error(`BRouter HTTP ${res.status}`);
         const data = await res.json();
         const feat = data.features[0];
@@ -410,7 +418,7 @@
         const coords = stops.map(s => `${s.lng},${s.lat}`).join(';');
         try {
             const url = `https://router.project-osrm.org/table/v1/driving/${coords}?annotations=duration,distance`;
-            const res = await fetch(url);
+            const res = await fetchWithTimeout(url, {}, 15000);
             const data = await res.json();
             if (data.code === 'Ok') {
                 console.log('Distance matrix: using OSRM driving');
@@ -432,7 +440,7 @@
                 const profile = brouterProfile();
                 const lonlats = stops.map(s => `${s.lng},${s.lat}`).join('|');
                 const url = `https://brouter.de/brouter?lonlats=${lonlats}&profile=${profile}&alternativeidx=0&format=geojson`;
-                const res = await fetch(url);
+                const res = await fetchWithTimeout(url, {}, 15000);
                 if (!res.ok) throw new Error(`BRouter HTTP ${res.status}`);
                 const data = await res.json();
                 const feat = data.features[0];
@@ -451,7 +459,7 @@
         // OSRM for driving (or as fallback)
         const coords = stops.map(s => `${s.lng},${s.lat}`).join(';');
         const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=true`;
-        const res = await fetch(url);
+        const res = await fetchWithTimeout(url, {}, 15000);
         const data = await res.json();
         if (data.code !== 'Ok') {
             throw new Error('Kon geen route berekenen. Controleer je internetverbinding.');
@@ -798,10 +806,10 @@
 
         // Single Overpass query: all buildings + all walkable paths
         const query = `[out:json][timeout:15];(way["building"](${bbox});way["highway"](${bbox}););out geom;`;
-        const res = await fetch('https://overpass-api.de/api/interpreter', {
+        const res = await fetchWithTimeout('https://overpass-api.de/api/interpreter', {
             method: 'POST',
             body: 'data=' + encodeURIComponent(query)
-        });
+        }, 18000);
         if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
         const osm = await res.json();
 
