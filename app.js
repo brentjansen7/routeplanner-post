@@ -947,12 +947,11 @@
 
             // Kies optimalisatiestrategie op basis van aantal stops
             let optimalOrder, matrix, clusterLabels;
-            if (state.stops.length > 40) {
-                // Grote route: eerst clusteren, dan per cluster TSP via worker
+            if (state.stops.length > 150) {
+                // Zeer grote route (>150): clusteren om worker-tijd te beperken
                 const result = await optimizeWithClustering(routingStops);
                 optimalOrder = result.order;
                 clusterLabels = result.clusterLabels;
-                // Haversine matrix voor samenvatting (per-stap afstanden)
                 matrix = buildHaversineMatrix(routingStops);
             } else {
                 // Kleine route: directe matrix + TSP via web worker
