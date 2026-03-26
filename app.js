@@ -720,7 +720,7 @@
         }
 
         // Phase 2: Perturbation — double-bridge kicks to escape local optima
-        const kicks = n <= 20 ? 50 : (n <= 40 ? 30 : 15);
+        const kicks = n <= 20 ? 200 : (n <= 50 ? 150 : (n <= 150 ? 200 : 60));
         for (let k = 0; k < kicks; k++) {
             const order = doubleBridge([...globalBest]);
             localSearch(order, distanceMatrix, round);

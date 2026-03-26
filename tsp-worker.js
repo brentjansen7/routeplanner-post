@@ -191,12 +191,19 @@ function solveTSP(distanceMatrix, roundTrip) {
         }
     }
 
-    // Meer perturbatie kicks voor grotere instances (verbeterd t.o.v. origineel)
-    const kicks = n <= 20 ? 80 : (n <= 40 ? 50 : 30);
+    // ILS perturbatie: meer kicks = beter ontsnappen uit lokale optima
+    // Voor n=95 is elke kick ~2ms in de worker, dus 200 kicks ≈ 0.4s extra
+    const kicks = n <= 20 ? 200 : (n <= 50 ? 150 : (n <= 150 ? 200 : 60));
     for (let k = 0; k < kicks; k++) {
         const order = doubleBridge([...globalBest]);
         localSearch(order, distanceMatrix, round);
         tryCandidate(order);
+        // Probeer ook de omgekeerde versie van de perturbatie
+        if (round) {
+            const rev = [order[0], ...order.slice(1).reverse()];
+            localSearch(rev, distanceMatrix, round);
+            tryCandidate(rev);
+        }
     }
 
     return globalBest;
