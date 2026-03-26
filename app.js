@@ -1450,6 +1450,12 @@
         document.getElementById('bs-niet-thuis').className = status === 'niet-thuis' ? 'actief' : '';
         document.getElementById('bs-note-text').textContent = state.bezorgNotes[stop.id]
             ? '📝 ' + state.bezorgNotes[stop.id] : '';
+
+        // Pan kaart naar huidige stop en open popup
+        if (stop.lat && stop.lng) {
+            map.setView([stop.lat, stop.lng], 18);
+            if (stop.marker) stop.marker.openPopup();
+        }
     }
 
     document.getElementById('bs-prev').addEventListener('click', () => {
