@@ -1744,13 +1744,21 @@
                 } catch {}
             }
 
-            // Poging 3: zonder huisnummer (vangt niet-bestaande huisnummers op)
+            // Poging 3: naburige huisnummers proberen (28 niet gevonden → probeer 27, 29, 26, 30…)
             if (!result) {
-                const zonderNr = origineel.replace(/\s+\d+[a-zA-Z]?\s*$/, '').trim();
-                if (zonderNr !== origineel) {
-                    const q3 = city ? `${zonderNr}, ${city}` : zonderNr;
-                    const r3 = await geocodeAddress(q3);
-                    if (r3) result = { ...r3, name: origineel }; // toon originele adresstring
+                const nrMatch = origineel.match(/^(.*\D)(\d+)([a-zA-Z]?)\s*$/);
+                if (nrMatch) {
+                    const straat = nrMatch[1].trim();
+                    const nr = parseInt(nrMatch[2]);
+                    const toevoeging = nrMatch[3];
+                    // Probeer dichtstbijzijnde nummers: ±1, ±2, ±3, ±5
+                    for (const delta of [1, -1, 2, -2, 3, -3, 5, -5]) {
+                        const kandidaat = nr + delta;
+                        if (kandidaat < 1) continue;
+                        const q = `${straat} ${kandidaat}${toevoeging}${city ? ', ' + city : ''}`;
+                        const r = await geocodeAddress(q);
+                        if (r) { result = { ...r, name: origineel }; break; }
+                    }
                 }
             }
 
