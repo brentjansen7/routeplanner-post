@@ -292,7 +292,7 @@
 
     async function geocodeAddress(address) {
         try {
-            const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1`;
+            const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1&countrycodes=nl`;
             const res = await fetch(url, {
                 headers: { 'Accept-Language': 'nl' }
             });
@@ -1691,12 +1691,16 @@
             .replace(/\bGr\.?\s+/gi,        'Graaf ');
 
         // Duplicaten samenvoegen: zelfde adres (hoofdletter-onafhankelijk) → één stop met x2/x3
+        // Herken ook "Fresia 40 X2" als 2x hetzelfde adres (strip de Xn suffix)
         const telling = {};
         for (const line of lines) {
             const gecorrigeerd = corrigeer(line);
-            const sleutel = gecorrigeerd.toLowerCase();
-            if (!telling[sleutel]) telling[sleutel] = { origineel: gecorrigeerd, n: 0 };
-            telling[sleutel].n++;
+            const xMatch = gecorrigeerd.match(/\s+[xX](\d+)\s*$/);
+            const adres = xMatch ? gecorrigeerd.slice(0, xMatch.index).trim() : gecorrigeerd;
+            const multiplier = xMatch ? parseInt(xMatch[1]) : 1;
+            const sleutel = adres.toLowerCase();
+            if (!telling[sleutel]) telling[sleutel] = { origineel: adres, n: 0 };
+            telling[sleutel].n += multiplier;
         }
         const uniekeLijst = Object.values(telling);
 
@@ -1718,11 +1722,38 @@
             progressFill.style.width = pct + '%';
             progressText.textContent = `Adres ${i + 1} van ${uniekeLijst.length} ophalen...`;
 
-            // Append city/village if provided and the line doesn't already contain it
-            const query = city && !origineel.toLowerCase().includes(city.toLowerCase())
-                ? `${origineel}, ${city}`
-                : origineel;
-            const result = await geocodeAddress(query);
+            // Geocodeer met meerdere pogingen zodat spelfouten en stadsnaam-problemen worden opgevangen
+            let result = null;
+
+            // Poging 1: vrije tekst (met stad indien opgegeven)
+            const queryVrij = city && !origineel.toLowerCase().includes(city.toLowerCase())
+                ? `${origineel}, ${city}` : origineel;
+            result = await geocodeAddress(queryVrij);
+
+            // Poging 2: gestructureerde zoekopdracht straat + stad apart (helpt bij spelfouten)
+            if (!result && city) {
+                try {
+                    const url2 = `https://nominatim.openstreetmap.org/search?format=json` +
+                        `&street=${encodeURIComponent(origineel)}&city=${encodeURIComponent(city)}` +
+                        `&countrycodes=nl&limit=1`;
+                    const data2 = await (await fetch(url2, { headers: { 'Accept-Language': 'nl' } })).json();
+                    if (data2.length > 0) result = {
+                        lat: parseFloat(data2[0].lat), lng: parseFloat(data2[0].lon),
+                        name: data2[0].display_name.split(',').slice(0, 3).join(','),
+                    };
+                } catch {}
+            }
+
+            // Poging 3: zonder huisnummer (vangt niet-bestaande huisnummers op)
+            if (!result) {
+                const zonderNr = origineel.replace(/\s+\d+[a-zA-Z]?\s*$/, '').trim();
+                if (zonderNr !== origineel) {
+                    const q3 = city ? `${zonderNr}, ${city}` : zonderNr;
+                    const r3 = await geocodeAddress(q3);
+                    if (r3) result = { ...r3, name: origineel }; // toon originele adresstring
+                }
+            }
+
             if (result) {
                 const naam = n > 1 ? `${result.name}  x${n}` : result.name;
                 addMarker(result.lat, result.lng, naam);
