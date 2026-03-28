@@ -9,14 +9,14 @@
     const PROXY_URL   = 'https://gemini-proxy.brent-jansen2009.workers.dev';
     const LS_WACHTRIJ = 'scanWachtrij';
 
-    const PROMPT = `Lees het BEZORGADRES van dit pakket.
-Geef ALLEEN het adres terug, één adres per regel, in dit formaat:
-Straatnaam Huisnummer, Postcode Plaats
+    const PROMPT = `Dit is een foto van een pakket of tijdschrift dat bezorgd moet worden.
+Lees het BEZORGADRES (het adres van de ontvanger, NIET het retouradres/afzender).
 
-Voorbeeld:
-Lavendel 63, 2925 XE Krimpen aan den IJssel
+Geef het adres in dit formaat: Straatnaam Huisnummer, Postcode Stad
+Voorbeeld: Lavendel 63, 2925 XE Krimpen aan den IJssel
 
 Als er meerdere bezorgadressen op de foto staan, geef ze allemaal op aparte regels.
+Als het onleesbaar is, schrijf dan alleen: ONLEESBAAR
 Geef GEEN afzendadres, GEEN namen, GEEN extra uitleg. Alleen het adres.`;
 
     // --- DOM refs ---
@@ -187,7 +187,9 @@ Geef GEEN afzendadres, GEEN namen, GEEN extra uitleg. Alleen het adres.`;
                 if (!tekst) continue;
                 tekst.split('\n')
                     .map(r => r.trim())
-                    .filter(r => r.length > 5 && /\d/.test(r))
+                    // Postcode normaliseren: 2925EZ → 2925 EZ
+                    .map(r => r.replace(/\b(\d{4})([A-Za-z]{2})\b/g, '$1 $2'))
+                    .filter(r => r.length > 5 && /\d/.test(r) && !/^onleesbaar$/i.test(r))
                     .forEach(r => {
                         if (!gevondenAdressen.find(a => a.tekst === r)) {
                             gevondenAdressen.push({ tekst: r, geselecteerd: true });
