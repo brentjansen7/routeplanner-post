@@ -6,8 +6,11 @@
 (function () {
     'use strict';
 
-    const PROXY_URL   = 'https://gemini-proxy.brent-jansen2009.workers.dev';
-    const LS_WACHTRIJ = 'scanWachtrij';
+    const PROXY_URL    = 'https://gemini-proxy.brent-jansen2009.workers.dev';
+    const LS_WACHTRIJ  = 'scanWachtrij';
+    const DAGMAX       = 50;   // zelfde als MAX_PER_DAY in de Worker
+    const LS_DAGNAAM   = 'scanDag';
+    const LS_DAGTELLER = 'scanTeller';
 
     const PROMPT = `Dit is een foto van een pakket of tijdschrift dat bezorgd moet worden.
 Lees het BEZORGADRES (het adres van de ontvanger, NIET het retouradres/afzender).
@@ -40,6 +43,34 @@ Geef GEEN afzendadres, GEEN namen, GEEN extra uitleg. Alleen het adres.`;
     const stapelCount        = document.getElementById('stapel-count');
     const stapelWis          = document.getElementById('stapel-wis');
     const naarRouteBtn       = document.getElementById('naar-route-btn');
+
+    // --- Dagelijkse scan-teller ---
+    function vandaag() { return new Date().toISOString().slice(0, 10); }
+
+    function getScansVandaag() {
+        if (localStorage.getItem(LS_DAGNAAM) !== vandaag()) {
+            localStorage.setItem(LS_DAGNAAM,   vandaag());
+            localStorage.setItem(LS_DAGTELLER, '0');
+        }
+        return parseInt(localStorage.getItem(LS_DAGTELLER) || '0');
+    }
+
+    function incrementTeller(n = 1) {
+        getScansVandaag(); // reset dag indien nodig
+        const nieuw = getScansVandaag() + n;
+        localStorage.setItem(LS_DAGTELLER, String(nieuw));
+        updateTellerUI();
+        return nieuw;
+    }
+
+    function updateTellerUI() {
+        const gebruikt = getScansVandaag();
+        const resterend = Math.max(0, DAGMAX - gebruikt);
+        const el = document.getElementById('scan-teller');
+        if (!el) return;
+        el.textContent = `${resterend} van ${DAGMAX} scans over vandaag`;
+        el.style.color = resterend <= 5 ? '#ef4444' : resterend <= 15 ? '#f59e0b' : '#6b7280';
+    }
 
     // --- State ---
     let geselecteerdeFiles = [];   // FileList → Array
@@ -141,6 +172,17 @@ Geef GEEN afzendadres, GEEN namen, GEEN extra uitleg. Alleen het adres.`;
     // ============================================================
     async function scanAllesFotos() {
         if (bezig) return;
+
+        // Controleer daglimiet vóór het starten
+        const gebruikt = getScansVandaag();
+        const totaalGevraagd = geselecteerdeFiles.length;
+        if (gebruikt >= DAGMAX) {
+            scanStatus.className = 'fout';
+            scanStatus.style.display = 'block';
+            scanStatus.textContent = `⛔ Daglimiet bereikt (${DAGMAX} scans/dag). Probeer morgen opnieuw.`;
+            return;
+        }
+
         bezig = true;
         analyseerBtn.disabled = true;
         gevondenAdressen = [];
@@ -171,11 +213,22 @@ Geef GEEN afzendadres, GEEN namen, GEEN extra uitleg. Alleen het adres.`;
             });
             fotoPreview.src = previewDataUrl;
 
+            // Stop als daglimiet bereikt is
+            if (getScansVandaag() >= DAGMAX) {
+                fouten += (totaal - i);
+                scanStatus.className = 'fout';
+                scanStatus.style.display = 'block';
+                scanStatus.textContent = `⛔ Daglimiet bereikt (${DAGMAX} scans/dag). ${totaal - i} foto's overgeslagen.`;
+                break;
+            }
+
             // Scan de batch parallel
             const batchResultaten = await Promise.all(batch.map(async file => {
                 try {
                     const { data, mime } = await leesBase64(file);
-                    return await scanEenFoto(data, mime);
+                    const resultaat = await scanEenFoto(data, mime);
+                    incrementTeller(1);
+                    return resultaat;
                 } catch (e) {
                     fouten++;
                     return '';
@@ -323,5 +376,6 @@ Geef GEEN afzendadres, GEEN namen, GEEN extra uitleg. Alleen het adres.`;
     // Init
     // ============================================================
     updateWachtrijUI();
+    updateTellerUI();
 
 })();
