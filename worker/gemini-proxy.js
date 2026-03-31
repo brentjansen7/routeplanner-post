@@ -9,7 +9,7 @@
 // 4. Ga naar KV → maak namespace aan: RATE_LIMIT_KV → bind als "RATE_LIMIT"
 // 5. Klik Deploy
 
-const GEMINI_MODEL   = 'gemini-1.5-flash';   // 1500/dag gratis (vs 20/dag voor 2.5-flash)
+const GEMINI_MODEL   = 'gemini-2.0-flash';   // veel quota, meer nauwkeurig
 const MAX_PER_DAY    = 50;                    // max scans per IP per dag
 const CORS_ORIGIN    = '*';                   // sta alle origins toe (alleen jouw site: 'https://brentjansen7.github.io')
 

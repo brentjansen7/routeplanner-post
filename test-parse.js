@@ -118,6 +118,7 @@ function parseRecipientAddress(data, city) {
 }
 
 // ========= TESTS =========
+const STAD = 'Krimpen aan den IJssel';
 let pass = 0, fail = 0;
 
 function test(name, ocrLines, city, expected) {
@@ -148,92 +149,117 @@ function testFail(name, ocrLines, city) {
     }
 }
 
-console.log('\n=== Basisgevallen ===');
+console.log('\n=== Basisgevallen (Krimpen aan den IJssel) ===');
 test('Simpele straat + postcode',
-    ['Hyacintstraat 12', '2345 AB Leiden'],
-    'Leiden', 'Hyacintstraat 12, 2345 AB Leiden');
+    ['Mozartlaan 12', '2925 CN Krimpen aan den IJssel'],
+    STAD, 'Mozartlaan 12, 2925 CN Krimpen aan den IJssel');
 
 test('Postcode zonder spatie',
-    ['Hyacintstraat 12', '2345AB Leiden'],
-    '', 'Hyacintstraat 12, 2345 AB Leiden');
+    ['Mozartlaan 12', '2925CN Krimpen aan den IJssel'],
+    STAD, 'Mozartlaan 12, 2925 CN Krimpen aan den IJssel');
 
 test('Met naam erboven',
-    ['J. de Boer', 'Koninginnelaan 45', '1234 CD Amsterdam'],
-    'Amsterdam', 'Koninginnelaan 45, 1234 CD Amsterdam');
+    ['J. de Boer', 'Populierenlaan 45', '2922 AB Krimpen aan den IJssel'],
+    STAD, 'Populierenlaan 45, 2922 AB Krimpen aan den IJssel');
 
 test('HOOFDLETTERS straatnaam',
-    ['HYACINT 8', '4321 ZX Utrecht'],
-    'Utrecht', 'HYACINT 8, 4321 ZX Utrecht');
+    ['MOZARTLAAN 8', '2925 CN Krimpen aan den IJssel'],
+    STAD, 'MOZARTLAAN 8, 2925 CN Krimpen aan den IJssel');
 
 console.log('\n=== OCR-rommel ===');
 test('Puntkomma na huisnummer',
-    ['Moderato 7 ;', '2925 CN Krimpen'],
-    'Krimpen', 'Moderato 7, 2925 CN Krimpen');
+    ['Nieuwe Tiendweg 7 ;', '2922 AK Krimpen aan den IJssel'],
+    STAD, 'Nieuwe Tiendweg 7, 2922 AK Krimpen aan den IJssel');
 
 test('Pipe voor postcode',
-    ['Atago 12', '| 2925CN Krimpen'],
-    'Krimpen', 'Atago 12, 2925 CN Krimpen');
+    ['IJsseldijk 22', '| 2921BK Krimpen aan den IJssel'],
+    STAD, 'IJsseldijk 22, 2921 BK Krimpen aan den IJssel');
 
 test('Rommel als eerste regel',
-    ['ccc bbb', 'Rozenlaan 33', '5678 GH Rotterdam'],
-    'Rotterdam', 'Rozenlaan 33, 5678 GH Rotterdam');
+    ['ccc bbb', 'Algerastraat 33', '2922 GH Krimpen aan den IJssel'],
+    STAD, 'Algerastraat 33, 2922 GH Krimpen aan den IJssel');
 
 console.log('\n=== Bedrijfsnamen overslaan ===');
-test('Bedrijfsnaam WISSEL + straat',
-    ['WISSEL VOEDINGSINDUSTRIE BV', 'Atago 12', '3456 EF Rotterdam'],
-    'Rotterdam', 'Atago 12, 3456 EF Rotterdam');
+test('Bedrijfsnaam boven straat',
+    ['JUMBO KRIMPEN BV', 'Computerweg 12', '2922 AK Krimpen aan den IJssel'],
+    STAD, 'Computerweg 12, 2922 AK Krimpen aan den IJssel');
 
 test('3 lagen (bedrijf + naam + straat)',
-    ['PostNL Pakket', 'Familie De Vries', 'Tulpstraat 99', '9999 ZZ Groningen'],
-    'Groningen', 'Tulpstraat 99, 9999 ZZ Groningen');
+    ['PostNL Pakket', 'Familie De Vries', 'Stormpolderdijk 99', '2927 LK Krimpen aan den IJssel'],
+    STAD, 'Stormpolderdijk 99, 2927 LK Krimpen aan den IJssel');
 
 console.log('\n=== Speciale straatformaten ===');
-test('2e Hyacintstraat',
-    ['2e Hyacintstraat 8', '2345 AB Leiden'],
-    'Leiden', '2e Hyacintstraat 8, 2345 AB Leiden');
+test('2e straat met cijfer vooraan',
+    ['2e Tochtweg 8', '2922 AB Krimpen aan den IJssel'],
+    STAD, '2e Tochtweg 8, 2922 AB Krimpen aan den IJssel');
 
 test('Straat met koppelteken',
-    ['Pluim-es 104', '5432 XY Eindhoven'],
-    'Eindhoven', 'Pluim-es 104, 5432 XY Eindhoven');
+    ['Pluim-es 104', '2923 XY Krimpen aan den IJssel'],
+    STAD, 'Pluim-es 104, 2923 XY Krimpen aan den IJssel');
 
 test('Komma tussen naam en nummer',
-    ['Pluim-es, 104', '5432 XY Eindhoven'],
-    'Eindhoven', 'Pluim-es 104, 5432 XY Eindhoven');
+    ['Langeland, 14', '2923 SJ Krimpen aan den IJssel'],
+    STAD, 'Langeland 14, 2923 SJ Krimpen aan den IJssel');
 
 test('Huisnummer met letter (12A)',
-    ['Bloemenstraat 12A', '1111 AA Amsterdam'],
-    'Amsterdam', 'Bloemenstraat 12A, 1111 AA Amsterdam');
+    ['Rijnstraat 12A', '2921 AA Krimpen aan den IJssel'],
+    STAD, 'Rijnstraat 12A, 2921 AA Krimpen aan den IJssel');
 
-testFail('Korte straatnaam te kort (Op 15)',
-    ['Op 15', '1234 AB Leiden'],
-    'Leiden');  // "Op" is 2 letters = geen echte straatnaam, terecht afwijzen
+testFail('Straatnaam te kort (Op 15)',
+    ['Op 15', '2922 AB Krimpen aan den IJssel'],
+    STAD);
 
 console.log('\n=== Stad-filter ===');
 test('Juiste postcode kiezen bij stad-filter',
-    ['Bakstraat 1', '1111 AA Utrecht', 'Rozenlaan 5', '2222 BB Leiden'],
-    'Leiden', 'Rozenlaan 5, 2222 BB Leiden');
+    ['Bakstraat 1', '1111 AA Utrecht', 'Rijnstraat 5', '2921 BB Krimpen aan den IJssel'],
+    STAD, 'Rijnstraat 5, 2921 BB Krimpen aan den IJssel');
 
-test('Zonder stad: laagste postcode',
-    ['Bakstraat 1', '1111 AA Utrecht', 'Rozenlaan 5', '2222 BB Leiden'],
-    '', 'Rozenlaan 5, 2222 BB Leiden');
+test('Zonder stad: laatste postcode wint',
+    ['Rijnstraat 1', '2921 AA Krimpen aan den IJssel', 'Mozartlaan 5', '2925 BB Krimpen aan den IJssel'],
+    '', 'Mozartlaan 5, 2925 BB Krimpen aan den IJssel');
 
 console.log('\n=== Moeten AFGEWEZEN worden ===');
-testFail('Geen postcode', ['Rozenlaan 5', 'Leiden']);
-testFail('Alleen postcode', ['1234 AB']);
-testFail('Straat zonder huisnummer', ['Bloemstraat', '1234 AB Leiden']);
+testFail('Geen postcode', ['Rijnstraat 5', 'Krimpen aan den IJssel']);
+testFail('Alleen postcode', ['2922 AK']);
+testFail('Straat zonder huisnummer', ['Mozartlaan', '2925 CN Krimpen aan den IJssel']);
 testFail('Rommel', ['%%% ###', '!@# bbb']);
 
 console.log('\n=== Typische OCR-fouten op plastic zakken ===');
 test('OCR plakt lijnen samen (straat+pc op 1 regel)',
-    ['Rozenlaan 5 3456 CD Rotterdam'],
-    'Rotterdam', null);  // moet werken of minstens niet crashen
+    ['Rijnstraat 5 2921 CD Krimpen aan den IJssel'],
+    STAD, null);
 
 test('Extra spaties in OCR',
-    ['  Esdoornlaan   23  ', '  6789 EF   Tilburg  '],
-    'Tilburg', 'Esdoornlaan 23, 6789 EF Tilburg');
+    ['  Mozartlaan   23  ', '  2925 CN   Krimpen aan den IJssel  '],
+    STAD, 'Mozartlaan 23, 2925 CN Krimpen aan den IJssel');
 
 test('Lage kwaliteit: gemengde case',
-    ['RoZenLaAn 7', '1234 ab leiden'],
-    '', null);  // minstens een adres teruggeven
+    ['RiJnStRaAt 7', '2921 ab krimpen aan den ijssel'],
+    '', null);
+
+console.log('\n=== Extra straatformaten ===');
+test('Toevoeging bis',
+    ['Nieuwe Tiendweg 14 bis', '2922 AK Krimpen aan den IJssel'],
+    STAD, 'Nieuwe Tiendweg 14 bis, 2922 AK Krimpen aan den IJssel');
+
+test('Toevoeging met letter (3B)',
+    ['Langeland 3B', '2923 SJ Krimpen aan den IJssel'],
+    STAD, 'Langeland 3B, 2923 SJ Krimpen aan den IJssel');
+
+test('3e straat met getal in naam',
+    ['3e Tochtweg 45', '2922 AK Krimpen aan den IJssel'],
+    STAD, '3e Tochtweg 45, 2922 AK Krimpen aan den IJssel');
+
+test('Naam boven adres',
+    ['Fam. Pietersen', 'Algerastraat 7', '2922 GH Krimpen aan den IJssel'],
+    STAD, 'Algerastraat 7, 2922 GH Krimpen aan den IJssel');
+
+test('Lange bedrijfsnaam + adres',
+    ['KRIMPEN DISTRIBUTIECENTRUM NEDERLAND BV', 'Stormpolderdijk 100', '2927 LK Krimpen aan den IJssel'],
+    STAD, 'Stormpolderdijk 100, 2927 LK Krimpen aan den IJssel');
+
+testFail('Straat te lang (> 26 letters)',
+    ['VerylongstreetnamewithwaytoomanycharsX 1', '2922 AK Krimpen aan den IJssel'],
+    STAD);
 
 console.log('\n=== Resultaat: ' + pass + ' geslaagd, ' + fail + ' mislukt ===\n');
