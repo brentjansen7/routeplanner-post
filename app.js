@@ -1409,7 +1409,9 @@
         bezorgProgress.classList.remove('hidden');
         timerInterval = setInterval(updateBezorgCounter, 60000);
         herenderBezorg();
-        bezorgScherm.classList.remove('hidden'); // direct fullscreen
+        document.getElementById('sidebar').style.display = 'none';
+        bezorgScherm.classList.remove('hidden');
+        map.invalidateSize();
         updateBsScherm();
     }
 
@@ -1434,6 +1436,8 @@
         bezorgStopBtn.style.display = 'none';
         bezorgProgress.classList.add('hidden');
         bezorgScherm.classList.add('hidden');
+        document.getElementById('sidebar').style.display = '';
+        map.invalidateSize();
         if (state._lastRouteArgs) showRouteSummary(...state._lastRouteArgs);
     }
 
@@ -1454,7 +1458,7 @@
 
         // Pan kaart naar huidige stop en open popup
         if (stop.lat && stop.lng) {
-            map.setView([stop.lat, stop.lng], 18);
+            map.setView([stop.lat, stop.lng], 16);
             if (stop.marker) stop.marker.openPopup();
         }
     }
