@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" width="192" height="192">
+  <!-- Achtergrond -->
+  <rect width="192" height="192" rx="40" fill="#1e293b"/>
+  <!-- Pakketje -->
+  <rect x="56" y="70" width="80" height="65" rx="8" fill="#f97316"/>
+  <line x1="56" y1="95" x2="136" y2="95" stroke="#1e293b" stroke-width="3"/>
+  <line x1="96" y1="70" x2="96" y2="95" stroke="#1e293b" stroke-width="3"/>
+  <!-- Locatie pin bovenop -->
+  <path d="M96 20 C82 20 71 31 71 44 C71 62 96 75 96 75 C96 75 121 62 121 44 C121 31 110 20 96 20Z" fill="#10b981"/>
+  <circle cx="96" cy="43" r="10" fill="white"/>
+  <!-- Route stippellijn -->
+  <line x1="60" y1="150" x2="132" y2="150" stroke="#4361ee" stroke-width="4" stroke-dasharray="8 6" stroke-linecap="round"/>
+  <circle cx="60" cy="150" r="5" fill="#10b981"/>
+  <circle cx="132" cy="150" r="5" fill="#ef4444"/>
+</svg>
