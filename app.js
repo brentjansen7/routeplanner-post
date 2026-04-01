@@ -1718,6 +1718,13 @@
         const failed = [];
         for (let i = 0; i < uniekeLijst.length; i++) {
             const { origineel, n } = uniekeLijst[i];
+
+            // Valideer: adres moet een huisnummer bevatten
+            if (!/\d/.test(origineel)) {
+                failed.push(origineel);
+                continue;
+            }
+
             // Voortgang bijwerken
             const pct = Math.round((i + 1) / uniekeLijst.length * 100);
             progressFill.style.width = pct + '%';
@@ -1778,7 +1785,8 @@
         importModal.classList.add('hidden');
 
         if (failed.length > 0) {
-            alert(`${added} van ${uniekeLijst.length} adressen toegevoegd.\n\nNiet gevonden:\n${failed.join('\n')}`);
+            const msg = `${added} van ${uniekeLijst.length} adressen toegevoegd.\n\n⚠️ Overgeslagen (geen huisnummer of niet gevonden):\n${failed.slice(0, 10).join('\n')}${failed.length > 10 ? `\n... en ${failed.length - 10} meer` : ''}`;
+            alert(msg);
         }
     });
 

@@ -82,6 +82,11 @@ function rowToAddress(row, cols) {
         return addr;
     }
 
+    // Huisnummer verplicht als straat aanwezig is
+    if (cols.straat && row[cols.straat] && (!cols.huisnr || !row[cols.huisnr])) {
+        return null; // straat zonder huisnummer niet toegestaan
+    }
+
     // Straat + huisnummer + postcode + stad samenstellen
     const parts = [];
     if (cols.straat && row[cols.straat]) parts.push(row[cols.straat]);
