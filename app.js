@@ -40,6 +40,7 @@
     // --- Map setup ---
     const map = L.map('map', {
         zoomControl: true,
+        doubleClickZoom: false,
     }).setView([52.0907, 5.1214], 8); // Center on Netherlands
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -1221,8 +1222,8 @@
         }
     });
 
-    // Click on map to add stop
-    map.on('click', async (e) => {
+    // Double-click on map to add stop
+    map.on('dblclick', async (e) => {
         const { lat, lng } = e.latlng;
         const name = await reverseGeocode(lat, lng) || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
         addMarker(lat, lng, name);
