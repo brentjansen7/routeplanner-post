@@ -6,7 +6,7 @@
 (function () {
     'use strict';
 
-    const PROXY_URL    = 'https://gemini-proxy.brent-jansen2009.workers.dev';
+    const PROXY_URL    = 'https://claude-proxy.brent-jansen2009.workers.dev';
     const LS_WACHTRIJ  = 'scanWachtrij';
     const DAGMAX       = 50;   // zelfde als MAX_PER_DAY in de Worker
     const LS_DAGNAAM   = 'scanDag';
