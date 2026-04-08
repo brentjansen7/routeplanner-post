@@ -139,7 +139,10 @@ Geef GEEN afzendadres, GEEN namen, GEEN extra uitleg. Alleen het adres.`;
     // ============================================================
     // Eén foto scannen via proxy
     // ============================================================
-    async function scanEenFoto(base64, mime, pogingen = 3) {
+    // Bijhouden of we een 429 rate-limit fout hebben gehad
+    let rateLimitFout = false;
+
+    async function scanEenFoto(base64, mime) {
         const resp = await fetch(PROXY_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -152,10 +155,9 @@ Geef GEEN afzendadres, GEEN namen, GEEN extra uitleg. Alleen het adres.`;
             })
         });
 
-        if (resp.status === 429 && pogingen > 1) {
-            // Rate limit: wacht 15 seconden en probeer opnieuw
-            await new Promise(r => setTimeout(r, 15000));
-            return scanEenFoto(base64, mime, pogingen - 1);
+        if (resp.status === 429) {
+            rateLimitFout = true;
+            throw new Error('RATELIMIT');
         }
 
         if (!resp.ok) {
@@ -172,6 +174,8 @@ Geef GEEN afzendadres, GEEN namen, GEEN extra uitleg. Alleen het adres.`;
     // ============================================================
     async function scanAllesFotos() {
         if (bezig) return;
+
+        rateLimitFout = false;
 
         // Controleer daglimiet vóór het starten
         const gebruikt = getScansVandaag();
@@ -194,22 +198,18 @@ Geef GEEN afzendadres, GEEN namen, GEEN extra uitleg. Alleen het adres.`;
 
         let fouten = 0;
 
-        // Verwerk in batches van 3 parallel (3× sneller dan sequentieel)
-        const batchSize = 3;
-        for (let i = 0; i < totaal; i += batchSize) {
-            const batch = geselecteerdeFiles.slice(i, i + batchSize);
-
-            // Progress bijwerken naar eerste van deze batch
+        // Verwerk foto's één voor één om API rate limit te voorkomen
+        for (let i = 0; i < totaal; i++) {
+            // Progress bijwerken
             const pct = Math.round((i / totaal) * 100);
             scanProgressBar.style.width = pct + '%';
-            scanProgressTekst.textContent =
-                `Foto ${i + 1}–${Math.min(i + batchSize, totaal)} van ${totaal} worden gescand...`;
+            scanProgressTekst.textContent = `Foto ${i + 1} van ${totaal} wordt gescand...`;
 
-            // Preview bijwerken naar eerste foto van de batch
+            // Preview bijwerken
             const previewDataUrl = await new Promise(r => {
                 const rd = new FileReader();
                 rd.onload = e => r(e.target.result);
-                rd.readAsDataURL(batch[0]);
+                rd.readAsDataURL(geselecteerdeFiles[i]);
             });
             fotoPreview.src = previewDataUrl;
 
@@ -222,37 +222,38 @@ Geef GEEN afzendadres, GEEN namen, GEEN extra uitleg. Alleen het adres.`;
                 break;
             }
 
-            // Scan de batch parallel
-            const batchResultaten = await Promise.all(batch.map(async file => {
-                try {
-                    const { data, mime } = await leesBase64(file);
-                    const resultaat = await scanEenFoto(data, mime);
-                    incrementTeller(1);
-                    return resultaat;
-                } catch (e) {
-                    fouten++;
-                    return '';
-                }
-            }));
+            // Stop als rate limit al bereikt is
+            if (rateLimitFout) { fouten++; continue; }
 
-            // Verwerk gevonden adressen
-            for (const tekst of batchResultaten) {
-                if (!tekst) continue;
-                tekst.split('\n')
-                    .map(r => r.trim())
-                    // Postcode normaliseren: 2925EZ → 2925 EZ
-                    .map(r => r.replace(/\b(\d{4})([A-Za-z]{2})\b/g, '$1 $2'))
-                    .filter(r => r.length > 5 && /\d/.test(r) && !/^onleesbaar$/i.test(r))
-                    .forEach(r => {
-                        if (!gevondenAdressen.find(a => a.tekst === r)) {
-                            gevondenAdressen.push({ tekst: r, geselecteerd: true });
-                        }
-                    });
+            try {
+                const { data, mime } = await leesBase64(geselecteerdeFiles[i]);
+                const tekst = await scanEenFoto(data, mime);
+                incrementTeller(1);
+
+                if (tekst) {
+                    tekst.split('\n')
+                        .map(r => r.trim())
+                        .map(r => r.replace(/\b(\d{4})([A-Za-z]{2})\b/g, '$1 $2'))
+                        .filter(r => r.length > 5 && /\d/.test(r) && !/^onleesbaar$/i.test(r))
+                        .forEach(r => {
+                            if (!gevondenAdressen.find(a => a.tekst === r)) {
+                                gevondenAdressen.push({ tekst: r, geselecteerd: true });
+                            }
+                        });
+                }
+            } catch (e) {
+                fouten++;
             }
 
-            // Pauze tussen batches (rate limit)
-            if (i + batchSize < totaal) {
-                await new Promise(r => setTimeout(r, 2000));
+            // Stop direct als rate limit bereikt is
+            if (rateLimitFout) {
+                fouten += (totaal - i - 1);
+                break;
+            }
+
+            // Pauze tussen foto's om rate limit te voorkomen (4 sec = max ~15/min)
+            if (i + 1 < totaal) {
+                await new Promise(r => setTimeout(r, 4000));
             }
         }
 
@@ -267,7 +268,12 @@ Geef GEEN afzendadres, GEEN namen, GEEN extra uitleg. Alleen het adres.`;
 
         if (gevondenAdressen.length === 0) {
             scanStatus.className = 'fout';
-            scanStatus.textContent = '❌ Geen adressen gevonden. Probeer duidelijkere foto\'s.';
+            scanStatus.style.display = 'block';
+            if (rateLimitFout) {
+                scanStatus.textContent = '⚠️ API limiet bereikt. Wacht een minuut en probeer opnieuw.';
+            } else {
+                scanStatus.textContent = '❌ Geen adressen gevonden. Probeer duidelijkere foto\'s.';
+            }
             return;
         }
 
