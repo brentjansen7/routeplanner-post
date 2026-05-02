@@ -24,6 +24,8 @@
                 <h1>Route Optimizer</h1>
                 <p class="subtitle">Optimaliseer je route met meerdere stops</p>
                 <p>v9</p>
+                <a id="login-link" href="login.html" style="display:block;width:100%;padding:8px;margin-top:12px;text-align:center;background:#667eea;color:white;border-radius:6px;cursor:pointer;font-size:14px;text-decoration:none;box-sizing:border-box;">🔐 Inloggen</a>
+                <button id="logout-btn" style="display:none;width:100%;padding:8px;margin-top:12px;border:none;background:#f0f0f0;border-radius:6px;cursor:pointer;font-size:14px;">🚪 Uitloggen</button>
             </div>
 
             <div class="search-section">
@@ -211,26 +213,27 @@
         window.__freeAddressLimit = 10;
         window.__usedAddresses = parseInt(localStorage.getItem('freeAddressCount') || '0');
 
-        // Standaard: scan tab verbergen tot we zeker weten dat user owner is
         const scanTab = document.getElementById('scan-tab');
-        if (scanTab) scanTab.style.display = 'none';
+        const loginLink = document.getElementById('login-link');
+        const logoutBtn = document.getElementById('logout-btn');
 
-        const showLoginLink = () => {
-            const header = document.querySelector('.sidebar-header');
-            if (header && !document.getElementById('login-link')) {
-                const loginLink = document.createElement('a');
-                loginLink.id = 'login-link';
-                loginLink.href = 'login.html';
-                loginLink.textContent = '🔐 Inloggen';
-                loginLink.style.cssText = 'display:block;width:100%;padding:8px;margin-top:20px;text-align:center;background:#667eea;color:white;border-radius:6px;cursor:pointer;font-size:14px;text-decoration:none;';
-                header.appendChild(loginLink);
+        const showAsLoggedIn = (profile) => {
+            if (loginLink) loginLink.style.display = 'none';
+            if (logoutBtn) {
+                logoutBtn.style.display = 'block';
+                logoutBtn.addEventListener('click', async () => {
+                    await signOut();
+                    window.location.reload();
+                });
+            }
+            if (scanTab && profile.role === 'owner') {
+                scanTab.style.display = '';
             }
         };
 
         (async () => {
             try {
                 if (!hasRealCredentials) {
-                    showLoginLink();
                     window.dispatchEvent(new CustomEvent('authReady'));
                     return;
                 }
@@ -239,20 +242,15 @@
                 const { data: { user } } = await supabase.auth.getUser();
 
                 if (!user) {
-                    showLoginLink();
                     window.dispatchEvent(new CustomEvent('authReady'));
                     return;
                 }
 
-                // User session bestaat — verifieer dat er ook een profile is
                 const profile = await getCurrentProfile();
 
                 if (!profile) {
-                    // Stale sessie zonder profile (account verwijderd of nooit voltooid).
-                    // Sign out en behandel als gast.
                     console.warn('Geen profile gevonden bij sessie — uitloggen.');
                     try { await signOut(); } catch {}
-                    showLoginLink();
                     window.dispatchEvent(new CustomEvent('authReady'));
                     return;
                 }
@@ -261,30 +259,10 @@
                 window.__currentUser = user;
                 window.__currentProfile = profile;
                 console.log('✓ User logged in:', user.email, 'role:', profile.role);
-
-                // Scan tab alleen voor owners
-                if (scanTab && profile.role === 'owner') {
-                    scanTab.style.display = '';
-                }
-
-                const header = document.querySelector('.sidebar-header');
-                if (header && !document.getElementById('logout-btn')) {
-                    const logoutBtn = document.createElement('button');
-                    logoutBtn.id = 'logout-btn';
-                    logoutBtn.textContent = '🚪 Uitloggen';
-                    logoutBtn.style.cssText = 'width:100%;padding:8px;margin-top:20px;border:none;background:#f0f0f0;border-radius:6px;cursor:pointer;font-size:14px;';
-                    logoutBtn.addEventListener('click', async () => {
-                        await signOut();
-                        window.location.reload();
-                    });
-                    header.appendChild(logoutBtn);
-                }
-
+                showAsLoggedIn(profile);
                 window.dispatchEvent(new CustomEvent('authReady'));
             } catch (error) {
                 console.error('Auth check:', error.message);
-                // Niet fataal — app draait als gast (scan tab al verborgen)
-                showLoginLink();
                 window.dispatchEvent(new CustomEvent('authReady'));
             }
         })();
