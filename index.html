@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Route Optimizer</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="style.css" />
+    <link rel="manifest" href="manifest.json" />
+    <meta name="theme-color" content="#FAFAF7" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Route" />
+    <link rel="apple-touch-icon" href="icon-192.png" />
+</head>
+<body>
+    <div id="app">
+        <aside id="sidebar">
+            <nav class="nav-tabs">
+                <a href="index.html" class="nav-tab active">Route</a>
+                <a href="scan.html" class="nav-tab" id="scan-tab" style="display:none;">Scan adressen</a>
+            </nav>
+            <div id="shared-route-banner" style="display:none;margin:10px 16px;"></div>
+            <div class="sidebar-header">
+                <h1>Route Optimizer</h1>
+                <p class="subtitle">Optimaliseer je route met meerdere stops</p>
+                <p>v9</p>
+            </div>
+
+            <div class="search-section">
+                <div class="search-wrapper">
+                    <input type="text" id="address-input" placeholder="Voeg adres toe..." autocomplete="off" />
+                    <button id="add-address-btn" title="Voeg toe">+</button>
+                </div>
+                <ul id="suggestions" class="suggestions-list"></ul>
+            </div>
+
+            <div class="import-section">
+                <button id="import-btn" class="btn-secondary">Importeer adressen</button>
+                <div id="import-modal" class="modal hidden">
+                    <div class="modal-content">
+                        <h3>Importeer adressen</h3>
+                        <div class="import-city-row">
+                            <label for="import-city">Plaats (optioneel):</label>
+                            <input type="text" id="import-city" placeholder="bijv. Veenendaal" autocomplete="off" />
+                        </div>
+                        <div style="display:flex;gap:0;margin-bottom:8px;">
+                            <button id="import-tab-tekst" class="import-tab import-tab-active" type="button">Tekst</button>
+                            <button id="import-tab-csv"   class="import-tab" type="button">CSV / Excel</button>
+                        </div>
+                        <div id="import-panel-tekst">
+                            <p>Eén adres per regel:</p>
+                            <textarea id="import-textarea" rows="8" placeholder="Lavendel 63&#10;Lavendel 65&#10;Vijverlaan 12&#10;De Brink 4"></textarea>
+                        </div>
+                        <div id="import-panel-csv" style="display:none;">
+                            <p style="font-size:12px;color:#666;margin-bottom:8px;">
+                                Kies een CSV of Excel-bestand. Kolommen: <em>straat, huisnummer, postcode, plaats</em>
+                                (of <em>lat, lng</em> voor directe coördinaten).
+                            </p>
+                            <input type="file" id="import-file" accept=".csv,.xlsx,.xls,.txt"
+                                style="width:100%;padding:8px;border:1px dashed #aaa;border-radius:8px;cursor:pointer;" />
+                        </div>
+                        <div id="import-progress" class="hidden" style="margin-top:10px;">
+                            <div style="background:#e0e7ff; border-radius:6px; height:8px;">
+                                <div id="import-progress-fill" style="background:#4f6ef7; height:100%; border-radius:6px; width:0%; transition:width 0.3s;"></div>
+                            </div>
+                            <p id="import-progress-text" style="font-size:12px; color:#666; margin:4px 0 0;"></p>
+                        </div>
+                        <div class="modal-actions">
+                            <button id="import-cancel" class="btn-secondary">Annuleren</button>
+                            <button id="import-confirm" class="btn-primary">Importeren</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="stops-section">
+                <div class="stops-header">
+                    <h2>Stops <span id="stop-count">(0)</span></h2>
+                    <button id="clear-all-btn" class="btn-text" title="Verwijder alles">Wis alles</button>
+                </div>
+                <ul id="stops-list" class="stops-list">
+                    <li class="empty-state">Klik op de kaart of zoek een adres om stops toe te voegen</li>
+                </ul>
+            </div>
+
+            <div class="options-section">
+                <div class="option-group">
+                    <label class="option-label">Vervoersmiddel</label>
+                    <div class="toggle-group">
+                        <button id="mode-car" class="toggle-btn active" data-mode="driving" title="Auto">&#128663; Auto</button>
+                        <button id="mode-bike" class="toggle-btn" data-mode="cycling" title="Fiets">&#128690; Fiets</button>
+                        <button id="mode-walk" class="toggle-btn" data-mode="foot" title="Lopen">&#128694; Lopen</button>
+                    </div>
+                </div>
+                <div class="option-group">
+                    <label class="option-check">
+                        <input type="checkbox" id="round-trip" />
+                        <span>Rondje (start = eind)</span>
+                    </label>
+                </div>
+                <div class="option-group">
+                    <label class="option-label">Bezorgers</label>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <input type="number" id="courier-count" min="1" max="10" value="1"
+                            style="width:60px;padding:6px;border:1px solid #ddd;border-radius:8px;font-size:14px;text-align:center;" />
+                        <span style="font-size:13px;color:#555;">bezorger(s)</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="actions-section">
+                <div id="saved-routes-section" style="display:flex; gap:6px; margin-bottom:8px;">
+                    <select id="saved-routes-select" style="flex:1; padding:8px; border-radius:8px; border:1px solid #ddd; font-size:13px; color:#444;">
+                        <option value="">— Opgeslagen routes —</option>
+                    </select>
+                    <button id="save-route-btn" class="btn-secondary" title="Huidige stops opslaan" style="padding:8px 10px;">💾</button>
+                    <button id="load-route-btn" class="btn-secondary" title="Geselecteerde route laden" style="padding:8px 10px;">📂</button>
+                    <button id="delete-route-btn" class="btn-secondary" title="Geselecteerde route verwijderen" style="padding:8px 10px;">🗑️</button>
+                </div>
+                <button id="optimize-btn" class="btn-primary btn-large" disabled>
+                    <span class="btn-icon">⟳</span> Optimaliseer route
+                </button>
+                <button id="reverse-btn" class="btn-secondary" disabled>Route omkeren</button>
+            </div>
+
+            <div id="route-summary" class="route-summary hidden">
+                <h2>Route samenvatting</h2>
+                <div class="summary-stats">
+                    <div class="stat">
+                        <span class="stat-label">Totale afstand</span>
+                        <span id="total-distance" class="stat-value">-</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Geschatte tijd</span>
+                        <span id="total-time" class="stat-value">-</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Aantal stops</span>
+                        <span id="total-stops" class="stat-value">-</span>
+                    </div>
+                </div>
+                <!-- Bezorg-voortgang (zichtbaar in bezorg-modus) -->
+                <div id="bezorg-progress" class="hidden">
+                    <div id="bezorg-counter"></div>
+                    <div id="bezorg-timer"></div>
+                    <div>
+                        <div id="bezorg-bar"></div>
+                    </div>
+                </div>
+                <div id="courier-routes" style="margin-bottom:8px;"></div>
+                <div id="route-steps" class="route-steps"></div>
+                <button id="bezorg-btn" class="btn-primary btn-large" style="margin-top:12px;width:100%;display:none;">&#128666; Start bezorging</button>
+                <button id="bezorg-stop-btn" class="btn-secondary" style="margin-top:8px;width:100%;display:none;">&#9209; Stop bezorging</button>
+                <button id="copy-route-btn" class="btn-secondary" style="margin-top:14px; width: 100%;">&#128203; Route kopiëren</button>
+                <button id="print-route-btn" class="btn-secondary" style="margin-top:8px; width: 100%;">&#128438; Route afdrukken</button>
+                <div id="maps-route-btns" style="margin-top:10px;"></div>
+            </div>
+
+        </aside>
+
+        <!-- Compact fullscreen bezorgscherm (mobiel) -->
+        <div id="bezorg-scherm" class="hidden">
+            <div id="bezorg-scherm-header">
+                <div id="bs-counter"></div>
+                <div id="bs-timer"></div>
+                <div id="bs-bar-wrap"><div id="bs-bar"></div></div>
+            </div>
+            <div id="bs-nav">
+                <button id="bs-prev">&#8592;</button>
+                <span id="bs-idx"></span>
+                <button id="bs-next">&#8594;</button>
+            </div>
+            <div id="bs-adres"></div>
+            <div id="bs-acties">
+                <button id="bs-bezorgd">&#10003; BEZORGD</button>
+                <button id="bs-niet-thuis">&#10007; NIET THUIS</button>
+            </div>
+            <button id="bs-notitie">&#128221; Notitie</button>
+            <div id="bs-note-text"></div>
+            <button id="bs-sluiten" class="btn-secondary">&#8592; Terug naar overzicht</button>
+        </div>
+
+        <!-- Eindsamenvatting modal -->
+        <div id="eind-modal" class="modal hidden">
+            <div class="modal-content" style="text-align:center;">
+                <h2 style="margin-bottom:8px;">&#127881; Route voltooid!</h2>
+                <div id="eind-stats" style="margin:16px 0;text-align:left;"></div>
+                <div id="eind-niet-thuis" style="margin-bottom:16px;text-align:left;"></div>
+                <div style="display:flex;gap:8px;">
+                    <button id="eind-kopieer" class="btn-secondary" style="flex:1;">&#128203; Kopieer lijst</button>
+                    <button id="eind-sluiten" class="btn-primary"    style="flex:1;">&#10003; Klaar</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="map"></div>
+    </div>
+
+    <div id="loading-overlay" class="hidden">
+        <div class="spinner"></div>
+        <p>Route wordt berekend...</p>
+    </div>
+
+    <script src="config.js"></script>
+    <script type="module">
+        import { getCurrentProfile, hasRealCredentials, signOut } from './auth.js';
+
+        // Setup: Check if user is logged in (optional for homepage)
+        window.__authChecked = true;
+        window.__isLoggedIn = false;
+        window.__freeAddressLimit = 10;
+        window.__usedAddresses = parseInt(localStorage.getItem('freeAddressCount') || '0');
+
+        // Standaard: scan tab verbergen tot we zeker weten dat user owner is
+        const scanTab = document.getElementById('scan-tab');
+        if (scanTab) scanTab.style.display = 'none';
+
+        const showLoginLink = () => {
+            const header = document.querySelector('.sidebar-header');
+            if (header && !document.getElementById('login-link')) {
+                const loginLink = document.createElement('a');
+                loginLink.id = 'login-link';
+                loginLink.href = 'login.html';
+                loginLink.textContent = '🔐 Inloggen';
+                loginLink.style.cssText = 'display:block;width:100%;padding:8px;margin-top:20px;text-align:center;background:#667eea;color:white;border-radius:6px;cursor:pointer;font-size:14px;text-decoration:none;';
+                header.appendChild(loginLink);
+            }
+        };
+
+        (async () => {
+            try {
+                if (!hasRealCredentials) {
+                    showLoginLink();
+                    window.dispatchEvent(new CustomEvent('authReady'));
+                    return;
+                }
+
+                const { supabase } = await import('./auth.js');
+                const { data: { user } } = await supabase.auth.getUser();
+
+                if (!user) {
+                    showLoginLink();
+                    window.dispatchEvent(new CustomEvent('authReady'));
+                    return;
+                }
+
+                // User session bestaat — verifieer dat er ook een profile is
+                const profile = await getCurrentProfile();
+
+                if (!profile) {
+                    // Stale sessie zonder profile (account verwijderd of nooit voltooid).
+                    // Sign out en behandel als gast.
+                    console.warn('Geen profile gevonden bij sessie — uitloggen.');
+                    try { await signOut(); } catch {}
+                    showLoginLink();
+                    window.dispatchEvent(new CustomEvent('authReady'));
+                    return;
+                }
+
+                window.__isLoggedIn = true;
+                window.__currentUser = user;
+                window.__currentProfile = profile;
+                console.log('✓ User logged in:', user.email, 'role:', profile.role);
+
+                // Scan tab alleen voor owners
+                if (scanTab && profile.role === 'owner') {
+                    scanTab.style.display = '';
+                }
+
+                const header = document.querySelector('.sidebar-header');
+                if (header && !document.getElementById('logout-btn')) {
+                    const logoutBtn = document.createElement('button');
+                    logoutBtn.id = 'logout-btn';
+                    logoutBtn.textContent = '🚪 Uitloggen';
+                    logoutBtn.style.cssText = 'width:100%;padding:8px;margin-top:20px;border:none;background:#f0f0f0;border-radius:6px;cursor:pointer;font-size:14px;';
+                    logoutBtn.addEventListener('click', async () => {
+                        await signOut();
+                        window.location.reload();
+                    });
+                    header.appendChild(logoutBtn);
+                }
+
+                window.dispatchEvent(new CustomEvent('authReady'));
+            } catch (error) {
+                console.error('Auth check:', error.message);
+                // Niet fataal — app draait als gast (scan tab al verborgen)
+                showLoginLink();
+                window.dispatchEvent(new CustomEvent('authReady'));
+            }
+        })();
+    </script>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Excel-import (optioneel: SheetJS CDN) -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" onerror="console.info('SheetJS niet geladen — Excel-import niet beschikbaar')"></script>
+    <script src="cluster.js"></script>
+    <script src="split.js"></script>
+    <script src="import.js"></script>
+    <script src="app.js"></script>
+    <script>
+        // Tab-wissel in import modal
+        document.addEventListener('DOMContentLoaded', () => {
+            const tabTekst = document.getElementById('import-tab-tekst');
+            const tabCsv   = document.getElementById('import-tab-csv');
+            const panelTekst = document.getElementById('import-panel-tekst');
+            const panelCsv   = document.getElementById('import-panel-csv');
+            if (tabTekst && tabCsv) {
+                tabTekst.addEventListener('click', () => {
+                    panelTekst.style.display = '';
+                    panelCsv.style.display   = 'none';
+                    tabTekst.classList.add('import-tab-active');
+                    tabCsv.classList.remove('import-tab-active');
+                });
+                tabCsv.addEventListener('click', () => {
+                    panelTekst.style.display = 'none';
+                    panelCsv.style.display   = '';
+                    tabCsv.classList.add('import-tab-active');
+                    tabTekst.classList.remove('import-tab-active');
+                });
+            }
+        });
+    </script>
+    <script>
+      if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+    </script>
+</body>
+</html>

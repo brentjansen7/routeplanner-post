@@ -1,0 +1,6 @@
+.env
+.env.local
+config.js
+node_modules/
+*.traineddata
+*.traineddata.gz

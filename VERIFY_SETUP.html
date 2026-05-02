@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <title>✅ Verificatie Checklist</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            max-width: 900px;
+            margin: 30px auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .container {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        h1 { color: #333; margin-bottom: 30px; }
+        .step {
+            background: #f9f9f9;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+        .step.done {
+            border-left-color: #28a745;
+            background: #f0f8f5;
+        }
+        .step.error {
+            border-left-color: #dc3545;
+            background: #fef5f5;
+        }
+        .check {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 8px 0;
+        }
+        .checkbox {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+        button {
+            background: #667eea;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 15px;
+            font-weight: 600;
+            margin: 10px 0;
+            transition: background 0.2s;
+        }
+        button:hover { background: #5568d3; }
+        .code {
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            margin: 8px 0;
+            color: #333;
+        }
+        .status {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            font-weight: bold;
+        }
+        .status.complete { color: #28a745; }
+        .status.incomplete { color: #ffc107; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>✅ Route Optimizer - Verificatie Checklist</h1>
+        <p style="color: #666; margin-bottom: 20px;">Vink alles af terwijl je door de stappen gaat. Het systeem werkt pas als alles groen is.</p>
+
+        <!-- FASE 1 -->
+        <h2 style="color: #667eea; margin-top: 30px;">FASE 1: Supabase Database</h2>
+
+        <div class="step" id="step1">
+            <h3>1. SQL Script Uitgevoerd</h3>
+            <p>Heb je het SQL script in Supabase SQL Editor gekopieerd en uitgevoerd?</p>
+            <div class="code">
+                CREATE TABLE companies, profiles, invites<br>
+                ALTER TABLE ENABLE ROW LEVEL SECURITY<br>
+                CREATE POLICY rules
+            </div>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ SQL script succesvol uitgevoerd (geen errors)</label>
+            </div>
+        </div>
+
+        <div class="step" id="step2">
+            <h3>2. Credentials Gekopieerd</h3>
+            <p>Heb je je Supabase credentials uit Settings → API gehaald?</p>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ Project URL: <code>https://sxgqerkyjjhtvxygqzqc.supabase.co</code></label>
+            </div>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ Anon Public Key gekopieerd (lang string)</label>
+            </div>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>❌ <strong>NIET</strong> Service Role Key (die is secret!)</label>
+            </div>
+        </div>
+
+        <!-- FASE 2 -->
+        <h2 style="color: #667eea; margin-top: 30px;">FASE 2: Setup Page Testen</h2>
+
+        <div class="step" id="step3">
+            <h3>3. GitHub Pages Bezocht</h3>
+            <p>Ga naar:</p>
+            <div class="code">https://brentjansen7.github.io/routeplanner-post/</div>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ Setup form verschijnt (niet blank)</label>
+            </div>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ Twee input velden: URL en Key</label>
+            </div>
+        </div>
+
+        <div class="step" id="step4">
+            <h3>4. Credentials Ingevuld</h3>
+            <p>Plak je credentials in de setup form:</p>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ URL ingevuld</label>
+            </div>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ Anon Key ingevuld (moet 50+ chars zijn)</label>
+            </div>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ "Save & Go to Login" geklikt</label>
+            </div>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ Login pagina verschijnt (geen errors)</label>
+            </div>
+        </div>
+
+        <!-- FASE 3 -->
+        <h2 style="color: #667eea; margin-top: 30px;">FASE 3: Account Aanmaken</h2>
+
+        <div class="step" id="step5">
+            <h3>5. Signup Formulier</h3>
+            <p>Klik "Maak account aan" en vul in:</p>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ Bedrijfsnaam: <code>Test Company</code></label>
+            </div>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ KvK: <code>12345678</code> (8 nummers)</label>
+            </div>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ Adres ingevuld</label>
+            </div>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ Email: <code>brent.jansen2009@gmail.com</code></label>
+            </div>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ Wachtwoord ingevuld</label>
+            </div>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ "Registreren" geklikt</label>
+            </div>
+        </div>
+
+        <div class="step" id="step6">
+            <h3>6. Signup Succesvol</h3>
+            <p>Na registratie:</p>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ Teruggekeerd naar login pagina</label>
+            </div>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ Geen foutmelding</label>
+            </div>
+        </div>
+
+        <!-- FASE 4 -->
+        <h2 style="color: #667eea; margin-top: 30px;">FASE 4: Login & Testen</h2>
+
+        <div class="step" id="step7">
+            <h3>7. Inloggen</h3>
+            <p>Login met je credentials:</p>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ Email: <code>brent.jansen2009@gmail.com</code></label>
+            </div>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ Wachtwoord ingevuld</label>
+            </div>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ "Inloggen" geklikt</label>
+            </div>
+        </div>
+
+        <div class="step" id="step8">
+            <h3>8. Route Optimizer Geladen</h3>
+            <p>Na inloggen:</p>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ Route Optimizer homepage verschijnt</label>
+            </div>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ Sidebar zichtbaar met adres input</label>
+            </div>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ Logout knop zichtbaar (🚪)</label>
+            </div>
+        </div>
+
+        <!-- FASE 5 -->
+        <h2 style="color: #667eea; margin-top: 30px;">FASE 5: Admin Panel</h2>
+
+        <div class="step" id="step9">
+            <h3>9. Admin Panel Bezocht</h3>
+            <p>Ga naar:</p>
+            <div class="code">https://brentjansen7.github.io/routeplanner-post/admin.html</div>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ Admin panel laden (niet "No access")</label>
+            </div>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ Tabel zichtbaar met: Bedrijf | KvK | Status | Eigenaar | Chauffeurs | Trial</label>
+            </div>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ Jouw bedrijf "Test Company" in tabel</label>
+            </div>
+            <div class="check">
+                <input type="checkbox" class="checkbox" onclick="updateStatus()">
+                <label>✓ Status = "trial"</label>
+            </div>
+        </div>
+
+        <!-- Status -->
+        <div style="margin-top: 40px; padding: 20px; background: #f0f0f0; border-radius: 8px;">
+            <h3>📊 Progress</h3>
+            <div id="progress" style="font-size: 16px; margin: 10px 0;">
+                <strong id="count">0</strong> van 17 stappen voltooid
+            </div>
+            <div style="background: white; height: 20px; border-radius: 4px; overflow: hidden;">
+                <div id="progressBar" style="background: #28a745; height: 100%; width: 0%; transition: width 0.3s;"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="status incomplete" id="statusBox">
+        ⏳ In Progress
+    </div>
+
+    <script>
+        function updateStatus() {
+            const checkboxes = document.querySelectorAll('.checkbox');
+            const checked = Array.from(checkboxes).filter(c => c.checked).length;
+            const total = checkboxes.length;
+
+            document.getElementById('count').textContent = checked;
+            const percent = (checked / total) * 100;
+            document.getElementById('progressBar').style.width = percent + '%';
+
+            const statusBox = document.getElementById('statusBox');
+            if (checked === total) {
+                statusBox.textContent = '✅ Klaar! Alles werkt!';
+                statusBox.className = 'status complete';
+            } else {
+                statusBox.textContent = `⏳ ${checked}/${total} stappen`;
+                statusBox.className = 'status incomplete';
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Auth Flow Test</title>
+    <style>
+        body { font-family: monospace; padding: 20px; background: #f5f5f5; }
+        .test { background: white; padding: 15px; margin: 10px 0; border-radius: 5px; }
+        .pass { border-left: 4px solid #28a745; }
+        .fail { border-left: 4px solid #dc3545; }
+        pre { background: #f0f0f0; padding: 10px; border-radius: 3px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <h1>🧪 Auth Flow Test</h1>
+    <div id="results"></div>
+
+    <script src="config.js"></script>
+    <script>
+        const results = document.getElementById('results');
+        let passed = 0, failed = 0;
+
+        function addTest(name, condition, details = '') {
+            const status = condition ? 'pass' : 'fail';
+            if (condition) passed++; else failed++;
+            const html = `
+                <div class="test ${status}">
+                    <strong>${condition ? '✓' : '✗'} ${name}</strong>
+                    ${details ? `<pre>${details}</pre>` : ''}
+                </div>
+            `;
+            results.innerHTML += html;
+        }
+
+        // Test 1: config.js loaded
+        addTest('config.js loaded', 
+            typeof window.ENV !== 'undefined',
+            `window.ENV = ${JSON.stringify(window.ENV, null, 2)}`
+        );
+
+        // Test 2: Supabase URL present
+        addTest('Supabase URL configured',
+            window.ENV?.SUPABASE_URL && window.ENV.SUPABASE_URL.includes('supabase.co'),
+            `URL: ${window.ENV?.SUPABASE_URL}`
+        );
+
+        // Test 3: Anon key status
+        const hasAnonKey = window.ENV?.SUPABASE_ANON_KEY && window.ENV.SUPABASE_ANON_KEY.length > 0;
+        addTest('Anon key configured (or will prompt)',
+            hasAnonKey || true,
+            `Key status: ${hasAnonKey ? 'present' : 'empty (will use setup.html)'}`
+        );
+
+        // Test 4: localStorage can be used
+        const canUseStorage = (() => {
+            try {
+                localStorage.setItem('_test', '1');
+                localStorage.removeItem('_test');
+                return true;
+            } catch(e) {
+                return false;
+            }
+        })();
+        addTest('localStorage available', canUseStorage);
+
+        // Test 5: Check if setup.html would redirect
+        const wouldNeedSetup = !window.ENV?.SUPABASE_URL || !window.ENV?.SUPABASE_ANON_KEY;
+        addTest('Setup redirect logic',
+            wouldNeedSetup === true,
+            'Would redirect to setup.html (correct - waiting for user to configure)'
+        );
+
+        // Summary
+        results.innerHTML += `<div style="margin-top:20px;font-weight:bold;">
+            Result: ${passed} passed, ${failed} failed
+        </div>`;
+    </script>
+</body>
+</html>

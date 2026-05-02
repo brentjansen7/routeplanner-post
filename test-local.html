@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <title>🧪 Local Auth Test</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .box {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 15px 0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .pass { border-left: 4px solid #28a745; color: #155724; }
+        .fail { border-left: 4px solid #dc3545; color: #721c24; }
+        .warn { border-left: 4px solid #ffc107; color: #856404; }
+        pre {
+            background: #f0f0f0;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        button {
+            background: #667eea;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            margin: 10px 0;
+        }
+        button:hover { background: #5568d3; }
+    </style>
+</head>
+<body>
+    <h1>🧪 Local Auth System Test</h1>
+    <div id="results"></div>
+
+    <script src="config.js"></script>
+    <script>
+        const results = document.getElementById('results');
+        let passed = 0, failed = 0;
+
+        function addTest(name, status, details = '') {
+            passed += (status === 'pass') ? 1 : 0;
+            failed += (status === 'fail') ? 1 : 0;
+            const html = `
+                <div class="box ${status}">
+                    <strong>${status === 'pass' ? '✓' : status === 'fail' ? '✗' : '⚠'} ${name}</strong>
+                    ${details ? `<pre>${details}</pre>` : ''}
+                </div>
+            `;
+            results.innerHTML += html;
+        }
+
+        // Test 1: config.js loaded
+        addTest('config.js loaded',
+            typeof window.ENV !== 'undefined' ? 'pass' : 'warn',
+            `window.ENV = ${JSON.stringify(window.ENV, null, 2)}`
+        );
+
+        // Test 2: Supabase URL
+        addTest('Supabase URL',
+            window.ENV?.SUPABASE_URL ? 'pass' : 'fail',
+            window.ENV?.SUPABASE_URL || 'Missing URL'
+        );
+
+        // Test 3: Anon key
+        addTest('Anon Key Status',
+            window.ENV?.SUPABASE_ANON_KEY ? 'pass' : 'warn',
+            window.ENV?.SUPABASE_ANON_KEY ? `Present (${window.ENV.SUPABASE_ANON_KEY.length} chars)` : 'Empty - will use setup.html'
+        );
+
+        // Test 4: localStorage
+        try {
+            localStorage.setItem('_test', '1');
+            localStorage.removeItem('_test');
+            addTest('localStorage available', 'pass', 'Read/write working');
+        } catch(e) {
+            addTest('localStorage available', 'fail', e.message);
+        }
+
+        // Test 5: File structure
+        const files = ['auth.js', 'setup.html', 'login.html', 'index.html'];
+        const missingFiles = [];
+
+        // We can't check files directly, but we can test imports
+        (async () => {
+            try {
+                const response = await fetch('auth.js');
+                if (response.ok) {
+                    addTest('auth.js accessible', 'pass', 'File exists and is readable');
+                } else {
+                    addTest('auth.js accessible', 'fail', `HTTP ${response.status}`);
+                }
+            } catch(e) {
+                addTest('auth.js accessible', 'fail', e.message);
+            }
+
+            try {
+                const response = await fetch('setup.html');
+                if (response.ok) {
+                    addTest('setup.html accessible', 'pass', 'File exists and is readable');
+                } else {
+                    addTest('setup.html accessible', 'fail', `HTTP ${response.status}`);
+                }
+            } catch(e) {
+                addTest('setup.html accessible', 'fail', e.message);
+            }
+
+            try {
+                const response = await fetch('login.html');
+                if (response.ok) {
+                    addTest('login.html accessible', 'pass', 'File exists and is readable');
+                } else {
+                    addTest('login.html accessible', 'fail', `HTTP ${response.status}`);
+                }
+            } catch(e) {
+                addTest('login.html accessible', 'fail', e.message);
+            }
+
+            // Final summary
+            setTimeout(() => {
+                const summary = `
+                    <div class="box ${failed === 0 ? 'pass' : 'fail'}">
+                        <h2>${failed === 0 ? '✓ All tests passed!' : `✗ ${failed} test(s) failed`}</h2>
+                        <p>Passed: ${passed} | Failed: ${failed}</p>
+                        ${window.ENV?.SUPABASE_ANON_KEY ?
+                            '<p>✓ Ready to test - credentials are configured</p>' :
+                            '<p>⚠ Next step: Go to GitHub Pages and fill in credentials via setup.html</p>'
+                        }
+                    </div>
+                `;
+                results.innerHTML += summary;
+            }, 100);
+        })();
+    </script>
+</body>
+</html>

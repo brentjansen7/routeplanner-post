@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scan adressen – Route Optimizer</title>
+    <link rel="stylesheet" href="style.css" />
+    <link rel="manifest" href="manifest.json" />
+    <meta name="theme-color" content="#FAFAF7" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <link rel="apple-touch-icon" href="icon-192.png" />
+    <style>
+        body { overflow-y: auto; background: #f1f4fb; }
+
+        #scan-app {
+            max-width: 480px;
+            margin: 0 auto;
+            min-height: 100vh;
+            background: white;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* API-sleutel sectie */
+        #api-sectie {
+            margin: 16px 16px 0;
+            background: #f8f9fc;
+            border: 1.5px solid #e0e4ef;
+            border-radius: 12px;
+            padding: 14px 16px;
+        }
+        #api-sectie h3 {
+            font-size: 14px;
+            font-weight: 700;
+            margin-bottom: 4px;
+            color: #1a1a2e;
+        }
+        #api-sectie p {
+            font-size: 12px;
+            color: #6b7280;
+            margin-bottom: 10px;
+            line-height: 1.5;
+        }
+        .api-row { display: flex; gap: 8px; }
+        #api-key-input {
+            flex: 1;
+            padding: 10px 12px;
+            border: 2px solid #e0e4ef;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: monospace;
+            outline: none;
+        }
+        #api-key-input:focus { border-color: #4361ee; }
+        #api-opslaan {
+            padding: 10px 14px;
+            background: #4361ee;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        #api-status { font-size: 12px; margin-top: 8px; min-height: 16px; }
+        #api-status.ok   { color: #10b981; }
+        #api-status.fout { color: #ef4444; }
+        #api-wijzig {
+            background: none;
+            border: none;
+            color: #4361ee;
+            font-size: 12px;
+            cursor: pointer;
+            padding: 0;
+            margin-left: auto;
+            text-decoration: underline;
+        }
+
+        /* Camera sectie */
+        #scan-sectie { margin: 16px; display: flex; flex-direction: column; gap: 12px; }
+
+        #preview-wrap {
+            position: relative;
+            background: #f1f4fb;
+            border-radius: 16px;
+            overflow: hidden;
+            min-height: 200px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 2px dashed #d0d8f0;
+        }
+        #preview-wrap.heeft-foto { border-style: solid; border-color: #4361ee; background: #000; }
+        #foto-preview { max-width: 100%; max-height: 340px; display: none; border-radius: 14px; }
+        #preview-placeholder { text-align: center; color: #9ca3af; padding: 32px 16px; }
+        #preview-placeholder div { font-size: 48px; margin-bottom: 8px; }
+        #preview-placeholder p  { font-size: 13px; }
+
+        .foto-knoppen { display: flex; gap: 10px; }
+        #camera-btn {
+            flex: 2; padding: 16px;
+            background: #4361ee; color: white;
+            border: none; border-radius: 12px;
+            font-size: 16px; font-weight: 700;
+            cursor: pointer;
+            display: flex; align-items: center; justify-content: center; gap: 8px;
+        }
+        #camera-btn:active { background: #3a56d4; }
+        #gallerij-btn {
+            flex: 1; padding: 16px;
+            background: #f0f4ff; color: #4361ee;
+            border: 1.5px solid #d0d8f0; border-radius: 12px;
+            font-size: 14px; font-weight: 600; cursor: pointer;
+        }
+        #camera-input, #gallerij-input { display: none; }
+
+        #analyseer-btn {
+            width: 100%; padding: 18px;
+            background: #10b981; color: white;
+            border: none; border-radius: 14px;
+            font-size: 18px; font-weight: 700;
+            cursor: pointer; display: none;
+            align-items: center; justify-content: center; gap: 10px;
+        }
+        #analyseer-btn:active { background: #059669; }
+        #analyseer-btn:disabled { background: #9ca3af; cursor: not-allowed; }
+
+        #scan-status {
+            text-align: center; padding: 12px;
+            border-radius: 10px; font-size: 14px; display: none;
+        }
+        #scan-status.laden { background: #eff6ff; color: #3b82f6; display: block; }
+        #scan-status.fout  { background: #fef2f2; color: #ef4444; display: block; }
+
+        /* Resultaten */
+        #resultaten-sectie { margin: 0 16px 16px; display: none; }
+        #resultaten-sectie h3 { font-size: 15px; font-weight: 700; margin-bottom: 10px; color: #1a1a2e; }
+        #adres-lijst { list-style: none; display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+
+        .adres-item {
+            display: flex; align-items: center; gap: 12px;
+            padding: 12px 14px; background: #f8f9fc;
+            border-radius: 10px; border: 1.5px solid #e0e4ef;
+            cursor: pointer; transition: all 0.15s;
+        }
+        .adres-item.geselecteerd { background: #f0fdf4; border-color: #10b981; }
+        .adres-check {
+            width: 22px; height: 22px; border-radius: 50%;
+            border: 2px solid #d0d8f0;
+            display: flex; align-items: center; justify-content: center;
+            flex-shrink: 0; font-size: 13px; color: transparent;
+            background: white; transition: all 0.15s;
+        }
+        .adres-item.geselecteerd .adres-check { background: #10b981; border-color: #10b981; color: white; }
+        .adres-tekst { font-size: 14px; font-weight: 500; color: #1a1a2e; line-height: 1.3; }
+
+        #toevoegen-btn {
+            width: 100%; padding: 16px;
+            background: #4361ee; color: white;
+            border: none; border-radius: 12px;
+            font-size: 16px; font-weight: 700;
+            cursor: pointer; display: none;
+        }
+        #toevoegen-btn:active { background: #3a56d4; }
+        #nogeen-btn {
+            width: 100%; padding: 12px;
+            background: none; border: 1.5px solid #d0d8f0;
+            border-radius: 12px; font-size: 14px; color: #6b7280;
+            cursor: pointer; margin-top: 8px; display: none;
+        }
+
+        /* Wachtrij banner */
+        #stapel-info {
+            background: #eff6ff; border: 1.5px solid #bfdbfe;
+            border-radius: 10px; padding: 10px 14px;
+            font-size: 13px; color: #1d4ed8;
+            margin: 0 16px 12px;
+            display: none;
+            align-items: center; gap: 8px;
+        }
+        #stapel-info strong { font-weight: 700; }
+        #stapel-wis { margin-left: auto; background: none; border: none; color: #6b7280; font-size: 18px; cursor: pointer; padding: 0 4px; }
+
+        /* Naar route knop */
+        #naar-route-btn {
+            margin: 0 16px 24px;
+            width: calc(100% - 32px);
+            padding: 16px; background: #4361ee; color: white;
+            border: none; border-radius: 12px;
+            font-size: 16px; font-weight: 700;
+            cursor: pointer; display: none;
+        }
+        #naar-route-btn:active { background: #3a56d4; }
+    </style>
+</head>
+<body>
+<div id="scan-app">
+
+    <nav class="nav-tabs">
+        <a href="index.html" class="nav-tab">Route</a>
+        <a href="scan.html" class="nav-tab active">Scan adressen</a>
+    </nav>
+
+    <div class="sidebar-header">
+        <h1>Scan adressen</h1>
+        <p class="subtitle">Foto van pakket → adres automatisch herkend</p>
+    </div>
+
+
+    <!-- Dagelijkse scan teller -->
+    <p id="scan-teller" style="text-align:center;font-size:12px;color:#6b7280;margin:4px 16px 0;"></p>
+
+    <!-- Scan interface -->
+    <div id="scan-sectie">
+        <div id="preview-wrap">
+            <div id="preview-placeholder">
+                <div>📷</div>
+                <p>Maak een foto van het bezorgadres<br>of kies een afbeelding uit de galerij</p>
+            </div>
+            <img id="foto-preview" alt="Pakket foto" />
+        </div>
+
+        <div class="foto-knoppen">
+            <button id="camera-btn">📷 Camera</button>
+            <button id="gallerij-btn">🖼️ Galerij</button>
+        </div>
+        <input type="file" id="camera-input" accept="image/*" capture="environment" />
+        <input type="file" id="gallerij-input" accept="image/*" multiple />
+
+        <button id="analyseer-btn">🔍 Analyseer adres</button>
+
+        <!-- Voortgangsbalk (meerdere foto's) -->
+        <div id="scan-progress" style="display:none;">
+            <div style="background:#e0e7ff;border-radius:8px;height:10px;overflow:hidden;">
+                <div id="scan-progress-bar" style="background:#4361ee;height:100%;width:0%;transition:width 0.4s;border-radius:8px;"></div>
+            </div>
+            <p id="scan-progress-tekst" style="font-size:13px;color:#4361ee;margin-top:6px;text-align:center;"></p>
+        </div>
+
+        <div id="scan-status"></div>
+    </div>
+
+    <!-- Wachtrij (adressen klaar om toe te voegen) -->
+    <div id="stapel-info">
+        <span>📦</span>
+        <span><strong id="stapel-count">0</strong> adressen in de wachtrij</span>
+        <button id="stapel-wis" title="Wachtrij leegmaken">✕</button>
+    </div>
+
+    <!-- Gevonden adressen -->
+    <div id="resultaten-sectie">
+        <h3>Gevonden adressen</h3>
+        <ul id="adres-lijst"></ul>
+        <button id="toevoegen-btn">✓ Voeg toe aan wachtrij</button>
+        <button id="nogeen-btn">📷 Scan nog een pakket</button>
+    </div>
+
+    <!-- Naar route knop -->
+    <button id="naar-route-btn">➜ Ga naar route →</button>
+
+</div>
+
+<script src="config.js"></script>
+<script type="module">
+    import { hasRealCredentials } from './auth.js';
+
+    // Scan is only for logged-in users
+    (async () => {
+        try {
+            if (!hasRealCredentials) {
+                alert('Je moet ingelogd zijn om adressen te scannen. Ga naar de homepagina en log in.');
+                window.location.href = 'index.html';
+                return;
+            }
+
+            const { supabase } = await import('./auth.js');
+            const { data: { user } } = await supabase.auth.getUser();
+
+            if (!user) {
+                alert('Je moet ingelogd zijn om adressen te scannen.');
+                window.location.href = 'login.html';
+                return;
+            }
+
+            // Auth OK - scan is allowed
+            console.log('✓ Scan access granted for:', user.email);
+        } catch (error) {
+            console.error('Auth check failed:', error);
+            alert('Auth error - redirecting to login');
+            window.location.href = 'login.html';
+        }
+    })();
+</script>
+
+<script src="scan.js"></script>
+<script>
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+</script>
+</body>
+</html>

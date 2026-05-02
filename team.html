@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Team - Route Optimizer</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f5f5;
+            min-height: 100vh;
+        }
+        .header {
+            background: white;
+            padding: 20px;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 { font-size: 24px; }
+        .logout-btn {
+            padding: 8px 16px;
+            background: #f0f0f0;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .logout-btn:hover { background: #e0e0e0; }
+        .container {
+            max-width: 800px;
+            margin: 30px auto;
+            padding: 0 20px;
+        }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .card h2 {
+            font-size: 18px;
+            margin-bottom: 16px;
+            color: #333;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 6px;
+            color: #333;
+            font-weight: 500;
+            font-size: 14px;
+        }
+        input[type="email"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        button {
+            padding: 10px 16px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        button:hover { background: #5568d3; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .message {
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 16px;
+            font-size: 14px;
+        }
+        .error { background: #f8d7da; color: #dc3545; }
+        .success { background: #d4edda; color: #155724; }
+        .drivers-list {
+            margin-top: 20px;
+        }
+        .driver-item {
+            padding: 12px;
+            background: #f9f9f9;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .driver-name {
+            font-weight: 500;
+            color: #333;
+        }
+        .driver-email {
+            font-size: 12px;
+            color: #666;
+        }
+        .loading { opacity: 0.6; pointer-events: none; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Route Optimizer — Team</h1>
+        <button class="logout-btn" id="logoutBtn">🚪 Uitloggen</button>
+    </div>
+
+    <div class="container">
+        <div class="card">
+            <h2>Chauffeurs uitnodigen</h2>
+            <div id="message"></div>
+            <form id="inviteForm">
+                <div class="form-group">
+                    <label for="driverEmail">Email van chauffeur</label>
+                    <input type="email" id="driverEmail" name="driverEmail" required />
+                </div>
+                <button type="submit" id="submitBtn">Uitnodiging versturen</button>
+            </form>
+        </div>
+
+        <div class="card">
+            <h2>Team (<span id="driverCount">0</span> chauffeurs)</h2>
+            <div id="driversList" class="drivers-list"></div>
+        </div>
+    </div>
+
+    <script src="config.js"></script>
+    <script type="module">
+        import { getCurrentProfile, getCompanyDrivers, createInvite, signOut, onAuthStateChange } from './auth.js';
+
+        let profile = null;
+
+        // Check auth
+        onAuthStateChange(async (event, session) => {
+            if (!session) {
+                window.location.href = 'login.html';
+                return;
+            }
+            if (!session && profile?.role !== 'owner') {
+                window.location.href = 'index.html';
+                return;
+            }
+
+            profile = await getCurrentProfile();
+            if (profile?.role !== 'owner') {
+                document.body.innerHTML = '<h1>❌ Alleen eigenaren hebben toegang</h1>';
+                return;
+            }
+
+            loadDrivers();
+        });
+
+        async function loadDrivers() {
+            if (!profile?.company_id) return;
+            const drivers = await getCompanyDrivers(profile.company_id);
+            const list = document.getElementById('driversList');
+            const count = document.getElementById('driverCount');
+
+            count.textContent = drivers.length;
+
+            if (drivers.length === 0) {
+                list.innerHTML = '<p style="color:#999;">Nog geen chauffeurs uitgenodigd</p>';
+                return;
+            }
+
+            list.innerHTML = drivers.map(d => `
+                <div class="driver-item">
+                    <div>
+                        <div class="driver-name">${d.full_name || 'Naamloos'}</div>
+                        <div class="driver-email">${d.email}</div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        document.getElementById('inviteForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = document.getElementById('submitBtn');
+            const msg = document.getElementById('message');
+            const email = document.getElementById('driverEmail').value;
+
+            btn.disabled = true;
+            msg.innerHTML = '';
+
+            try {
+                const invite = await createInvite(profile.company_id, email);
+                const link = `${window.location.origin}/invite.html?token=${invite.token}`;
+                msg.innerHTML = `<div class="success">✓ Uitnodiging verstuurd!<br><small>Link: ${link}</small></div>`;
+                document.getElementById('driverEmail').value = '';
+                loadDrivers();
+            } catch (error) {
+                msg.innerHTML = `<div class="error">❌ ${error.message}</div>`;
+            } finally {
+                btn.disabled = false;
+            }
+        });
+
+        document.getElementById('logoutBtn').addEventListener('click', async () => {
+            await signOut();
+            window.location.href = 'login.html';
+        });
+    </script>
+</body>
+</html>
