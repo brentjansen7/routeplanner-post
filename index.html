@@ -3,8 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com https://cdn.sheetjs.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: blob: https:; connect-src 'self' https://*.supabase.co https://nominatim.openstreetmap.org https://router.project-osrm.org https://overpass-api.de https://api.qrserver.com https://*.tile.openstreetmap.org; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self';">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
     <title>Route Optimizer</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha384-sHL9NAb7lN7rfvG5lfHpm643Xkcjzp4jFvuavGOndn6pjVqS6ny56CAt3nsEVT4H"
+          crossorigin="anonymous" />
     <link rel="stylesheet" href="style.css" />
     <link rel="manifest" href="manifest.json" />
     <meta name="theme-color" content="#FAFAF7" />
@@ -209,13 +213,18 @@
 
         // Setup: Check if user is logged in (optional for homepage)
         window.__authChecked = true;
-        window.__isLoggedIn = false;
-        window.__freeAddressLimit = 10;
+        // TIJDELIJK: login uitgeschakeld — iedereen mag alles onbeperkt gebruiken
+        window.__isLoggedIn = true;
+        window.__freeAddressLimit = Infinity;
         window.__usedAddresses = parseInt(localStorage.getItem('freeAddressCount') || '0');
 
         const scanTab = document.getElementById('scan-tab');
         const loginLink = document.getElementById('login-link');
         const logoutBtn = document.getElementById('logout-btn');
+
+        // TIJDELIJK: login-knop verbergen, scan-tab voor iedereen tonen
+        if (loginLink) loginLink.style.display = 'none';
+        if (scanTab) scanTab.style.display = '';
 
         const showAsLoggedIn = (profile) => {
             if (loginLink) loginLink.style.display = 'none';
@@ -268,9 +277,14 @@
         })();
     </script>
 
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha384-cxOPjt7s7Iz04uaHJceBmS+qpjv2JkIHNVcuOrM+YHwZOmJGBXI00mdUXEq65HTH"
+            crossorigin="anonymous"></script>
     <!-- Excel-import (optioneel: SheetJS CDN) -->
-    <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" onerror="console.info('SheetJS niet geladen — Excel-import niet beschikbaar')"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"
+            integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT"
+            crossorigin="anonymous"
+            onerror="console.info('SheetJS niet geladen — Excel-import niet beschikbaar')"></script>
     <script src="cluster.js"></script>
     <script src="split.js"></script>
     <script src="import.js"></script>
