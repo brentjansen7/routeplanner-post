@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com https://cdn.sheetjs.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: blob: https:; connect-src 'self' https://*.supabase.co https://nominatim.openstreetmap.org https://router.project-osrm.org https://overpass-api.de https://api.qrserver.com https://*.tile.openstreetmap.org; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com https://cdn.sheetjs.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: blob: https:; connect-src 'self' https://*.supabase.co https://nominatim.openstreetmap.org https://router.project-osrm.org https://routing.openstreetmap.de https://brouter.de https://overpass-api.de https://api.qrserver.com https://*.tile.openstreetmap.org; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self';">
     <meta name="referrer" content="strict-origin-when-cross-origin">
     <title>Route Optimizer</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -27,7 +27,7 @@
             <div class="sidebar-header">
                 <h1>Route Optimizer</h1>
                 <p class="subtitle">Optimaliseer je route met meerdere stops</p>
-                <p>v9.1</p>
+                <p>v9.2</p>
                 <a id="login-link" href="login.html" style="display:block;width:100%;padding:8px;margin-top:12px;text-align:center;background:#667eea;color:white;border-radius:6px;cursor:pointer;font-size:14px;text-decoration:none;box-sizing:border-box;">🔐 Inloggen</a>
                 <button id="logout-btn" style="display:none;width:100%;padding:8px;margin-top:12px;border:none;background:#f0f0f0;border-radius:6px;cursor:pointer;font-size:14px;">🚪 Uitloggen</button>
             </div>
@@ -112,6 +112,22 @@
                         <span style="font-size:13px;color:#555;">bezorger(s)</span>
                     </div>
                 </div>
+                <div class="option-group">
+                    <label class="option-label">Tijd per adres</label>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <input type="number" id="stop-seconds" min="0" max="600" step="5" value="30"
+                            style="width:60px;padding:6px;border:1px solid #ddd;border-radius:8px;font-size:14px;text-align:center;" />
+                        <span style="font-size:13px;color:#555;">seconden</span>
+                    </div>
+                </div>
+                <div class="option-group">
+                    <label class="option-label">Starttijd</label>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <input type="time" id="start-time"
+                            style="padding:6px;border:1px solid #ddd;border-radius:8px;font-size:14px;" />
+                        <span style="font-size:13px;color:#555;">leeg = nu</span>
+                    </div>
+                </div>
             </div>
 
             <div class="actions-section">
@@ -145,6 +161,7 @@
                         <span id="total-stops" class="stat-value">-</span>
                     </div>
                 </div>
+                <div id="time-breakdown" style="font-size:12px;color:#666;margin:-4px 0 10px;"></div>
                 <!-- Bezorg-voortgang (zichtbaar in bezorg-modus) -->
                 <div id="bezorg-progress" class="hidden">
                     <div id="bezorg-counter"></div>
@@ -288,6 +305,7 @@
     <script src="cluster.js"></script>
     <script src="split.js"></script>
     <script src="import.js"></script>
+    <script src="tsp-worker.js"></script>
     <script src="app.js"></script>
     <script>
         // Tab-wissel in import modal

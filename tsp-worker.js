@@ -1,10 +1,18 @@
 // tsp-worker.js - TSP solver in een Web Worker
-// Ontvangt: { distances: number[][], roundTrip: boolean }
+// Ontvangt: { distances: number[][], roundTrip: boolean, initialOrder?: number[], timeBudgetMs?: number }
 // Stuurt terug: { order: number[] }
+//
+// Aanpak: knoop 0 staat vast vooraan. We voegen een virtuele eindknoop toe
+// (open route: kost 0, rondje: kost terug naar 0), zodat open routes en
+// rondjes allebei een pad met vaste begin- en eindknoop zijn.
+// Werkt met asymmetrische matrices (eenrichtingsverkeer, fietspaden).
 
 'use strict';
 
-// --- Kostenfunctie ---
+const K_NEIGHBORS = 12;
+const EPS = 1e-6;
+
+// --- Kostenfunctie op de originele matrix ---
 function routeCost(order, dist, round) {
     let c = 0;
     for (let i = 0; i < order.length - 1; i++) c += dist[order[i]][order[i + 1]];
@@ -36,182 +44,231 @@ function bruteForce(dist, n, round) {
     return bestOrder;
 }
 
-// --- Nearest Neighbor heuristiek ---
-function nearestNeighbor(dist, n, startIdx) {
-    const visited = new Set([startIdx]);
-    const order = [startIdx];
-    while (visited.size < n) {
-        const cur = order[order.length - 1];
-        let best = -1, bestD = Infinity;
-        for (let i = 0; i < n; i++) {
-            if (!visited.has(i) && dist[cur][i] < bestD) { bestD = dist[cur][i]; best = i; }
-        }
-        visited.add(best);
-        order.push(best);
+// --- Matrix met virtuele eindknoop (index n) ---
+function buildExtended(dist, round) {
+    const n = dist.length;
+    const d = [];
+    for (let i = 0; i < n; i++) {
+        const row = new Float64Array(n + 1);
+        for (let j = 0; j < n; j++) row[j] = dist[i][j];
+        row[n] = round ? dist[i][0] : 0;
+        d.push(row);
     }
-    return order;
+    d.push(new Float64Array(n + 1)); // eindknoop heeft geen uitgaande kanten
+    return d;
 }
 
-// --- 2-opt ---
-function improve2Opt(order, dist, round) {
-    const n = order.length;
-    let improved = true;
-    while (improved) {
-        improved = false;
-        for (let i = 1; i < n - 1; i++) {
-            for (let j = i + 1; j < n; j++) {
-                let delta;
-                if (j === n - 1 && !round) {
-                    delta = dist[order[i - 1]][order[j]] - dist[order[i - 1]][order[i]];
-                } else {
-                    const nextJ = (j + 1 < n) ? order[j + 1] : order[0];
-                    const before = dist[order[i - 1]][order[i]] + dist[order[j]][nextJ];
-                    const after = dist[order[i - 1]][order[j]] + dist[order[i]][nextJ];
-                    delta = after - before;
-                }
-                if (delta < -1e-6) {
-                    let lo = i, hi = j;
-                    while (lo < hi) { [order[lo], order[hi]] = [order[hi], order[lo]]; lo++; hi--; }
-                    improved = true;
-                }
+// Per knoop de K dichtstbijzijnde bestemmingen
+function buildNeighbors(d, size) {
+    const nb = [];
+    for (let i = 0; i < size; i++) {
+        const idx = [];
+        for (let j = 0; j < size; j++) if (j !== i) idx.push(j);
+        idx.sort((a, b) => d[i][a] - d[i][b]);
+        nb.push(idx.slice(0, K_NEIGHBORS));
+    }
+    return nb;
+}
+
+// --- Tour-toestand: volgorde + posities + prefix-sommen (vooruit/achteruit) ---
+class Tour {
+    constructor(d, path) {
+        this.d = d;
+        this.p = path;                 // [0, ..., end]
+        this.L = path.length - 1;      // index van de eindknoop
+        this.pos = new Int32Array(path.length);
+        this.F = new Float64Array(path.length);
+        this.B = new Float64Array(path.length);
+        this.refresh();
+    }
+    refresh() {
+        const { d, p, pos, F, B } = this;
+        pos[p[0]] = 0;
+        for (let k = 1; k < p.length; k++) {
+            pos[p[k]] = k;
+            F[k] = F[k - 1] + d[p[k - 1]][p[k]];
+            B[k] = B[k - 1] + d[p[k]][p[k - 1]];
+        }
+    }
+    cost() { return this.F[this.L]; }
+}
+
+// --- 2-opt (segment omdraaien), asymmetrie-correct, met buurlijsten ---
+function twoOptPass(t, nb) {
+    const d = t.d;
+    let any = false;
+    for (let i = 1; i < t.L - 1; i++) {
+        const p = t.p;
+        const a = p[i - 1];
+        const ai = p[i];
+        // Nieuwe kant a → p[j]: segment [i..j] omdraaien
+        for (const c of nb[a]) {
+            const j = t.pos[c];
+            if (j <= i || j >= t.L) continue;
+            const b = p[j + 1];
+            const delta = d[a][c] + d[ai][b] - d[a][ai] - d[c][b]
+                + (t.B[j] - t.B[i]) - (t.F[j] - t.F[i]);
+            if (delta < -EPS) { reverse(t, i, j); any = true; break; }
+        }
+    }
+    for (let i = 1; i < t.L - 1; i++) {
+        const p = t.p;
+        const ai = p[i];
+        // Nieuwe kant p[i] → p[j+1]: segment [i..j] omdraaien
+        for (const c of nb[ai]) {
+            const j = t.pos[c] - 1;
+            if (j <= i || j >= t.L) continue;
+            const a = p[i - 1];
+            const cj = p[j];
+            const delta = d[a][cj] + d[ai][c] - d[a][ai] - d[cj][c]
+                + (t.B[j] - t.B[i]) - (t.F[j] - t.F[i]);
+            if (delta < -EPS) { reverse(t, i, j); any = true; break; }
+        }
+    }
+    return any;
+}
+
+function reverse(t, i, j) {
+    const p = t.p;
+    while (i < j) { const tmp = p[i]; p[i] = p[j]; p[j] = tmp; i++; j--; }
+    t.refresh();
+}
+
+// --- Or-opt: segment van 1-3 knopen verplaatsen, ook omgedraaid ---
+function orOptPass(t, nb) {
+    const d = t.d;
+    let any = false;
+    for (let s = 1; s <= 3; s++) {
+        for (let i = 1; i + s - 1 <= t.L - 1; i++) {
+            const p = t.p;
+            const e = i + s - 1;
+            const prev = p[i - 1], first = p[i], last = p[e], next = p[e + 1];
+            const gain = d[prev][first] + d[last][next] - d[prev][next];
+            const revExtra = (t.B[e] - t.B[i]) - (t.F[e] - t.F[i]);
+            let best = -EPS, bestQ = -1, bestRev = false;
+
+            const tryInsert = (q) => {
+                if (q < 0 || q >= t.L || (q >= i - 1 && q <= e)) return;
+                const x = p[q], y = p[q + 1];
+                const fwd = d[x][first] + d[last][y] - d[x][y] - gain;
+                if (fwd < best) { best = fwd; bestQ = q; bestRev = false; }
+                const rev = d[x][last] + d[first][y] - d[x][y] + revExtra - gain;
+                if (rev < best) { best = rev; bestQ = q; bestRev = true; }
+            };
+            for (const c of nb[last]) tryInsert(t.pos[c] - 1);  // invoegen vóór c
+            for (const c of nb[first]) tryInsert(t.pos[c]);     // invoegen na c
+
+            if (bestQ >= 0) {
+                const seg = p.slice(i, e + 1);
+                if (bestRev) seg.reverse();
+                const rest = p.slice(0, i).concat(p.slice(e + 1));
+                const at = bestQ < i ? bestQ + 1 : bestQ + 1 - s;
+                rest.splice(at, 0, ...seg);
+                t.p = rest;
+                t.refresh();
+                any = true;
             }
         }
     }
+    return any;
 }
 
-// --- Or-opt: verplaats segmenten van 1, 2, 3 knopen ---
-function improveOrOpt(order, dist, round) {
-    const n = order.length;
-    let improved = true;
-    while (improved) {
-        improved = false;
-        for (let segLen = 1; segLen <= Math.min(3, n - 2); segLen++) {
-            for (let i = 1; i < n; i++) {
-                if (i + segLen > n) continue;
-                const endI = i + segLen - 1;
-                const prev = order[i - 1];
-                const segFirst = order[i];
-                const segLast = order[endI];
-                const hasNext = (endI + 1 < n);
-                const next = hasNext ? order[endI + 1] : (round ? order[0] : null);
-                const removeCost = dist[prev][segFirst] + (next !== null ? dist[segLast][next] : 0);
-                const bridgeCost = (next !== null) ? dist[prev][next] : 0;
-                const removalGain = removeCost - bridgeCost;
-                for (let j = 0; j < n; j++) {
-                    if (j >= i - 1 && j <= endI) continue;
-                    const jNext = (j + 1 < n) ? order[j + 1] : (round ? order[0] : null);
-                    if (jNext === null) continue;
-                    const insertCost = dist[order[j]][segFirst] + dist[segLast][jNext] - dist[order[j]][jNext];
-                    if (insertCost - removalGain < -1e-6) {
-                        const segment = order.splice(i, segLen);
-                        const insertPos = j < i ? j + 1 : j + 1 - segLen;
-                        order.splice(insertPos, 0, ...segment);
-                        improved = true;
-                        break;
-                    }
-                }
-                if (improved) break;
-            }
-            if (improved) break;
+function localSearch(t, nb) {
+    for (let iter = 0; iter < 50; iter++) {
+        const a = twoOptPass(t, nb);
+        const b = orOptPass(t, nb);
+        if (!a && !b) break;
+    }
+}
+
+// --- Startoplossing: (gerandomiseerde) nearest neighbor vanaf knoop 0 ---
+function nearestNeighborPath(d, n, randomize) {
+    const visited = new Uint8Array(n);
+    visited[0] = 1;
+    const path = [0];
+    for (let step = 1; step < n; step++) {
+        const cur = path[path.length - 1];
+        let b1 = -1, b2 = -1, b3 = -1;
+        for (let j = 1; j < n; j++) {
+            if (visited[j]) continue;
+            if (b1 < 0 || d[cur][j] < d[cur][b1]) { b3 = b2; b2 = b1; b1 = j; }
+            else if (b2 < 0 || d[cur][j] < d[cur][b2]) { b3 = b2; b2 = j; }
+            else if (b3 < 0 || d[cur][j] < d[cur][b3]) { b3 = j; }
         }
+        let pick = b1;
+        if (randomize) {
+            const r = Math.random();
+            if (r > 0.7 && b2 >= 0) pick = b2;
+            if (r > 0.9 && b3 >= 0) pick = b3;
+        }
+        visited[pick] = 1;
+        path.push(pick);
     }
+    path.push(n); // virtuele eindknoop
+    return path;
 }
 
-// --- Lokale zoektocht: wissel 2-opt en or-opt af ---
-function localSearch(order, dist, round) {
-    let prevCost = routeCost(order, dist, round);
-    for (let iter = 0; iter < 20; iter++) {
-        improve2Opt(order, dist, round);
-        improveOrOpt(order, dist, round);
-        const newCost = routeCost(order, dist, round);
-        if (prevCost - newCost < 0.001) break;
-        prevCost = newCost;
-    }
-}
-
-// --- Double-bridge perturbatie ---
-function doubleBridge(order) {
-    const n = order.length;
-    if (n < 6) return [...order];
-    const cuts = [];
-    while (cuts.length < 3) {
-        const c = 1 + Math.floor(Math.random() * (n - 2));
-        if (!cuts.includes(c)) cuts.push(c);
-    }
-    cuts.sort((a, b) => a - b);
-    const seg1 = order.slice(0, cuts[0]);
-    const seg2 = order.slice(cuts[0], cuts[1]);
-    const seg3 = order.slice(cuts[1], cuts[2]);
-    const seg4 = order.slice(cuts[2]);
-    return [...seg1, ...seg3, ...seg2, ...seg4];
-}
-
-// --- Normaliseer: knoop 0 op positie 0 ---
-function normalizeOrder(order, dist, round) {
-    const idx0 = order.indexOf(0);
-    if (idx0 === 0) return order;
-    if (round) {
-        return [...order.slice(idx0), ...order.slice(0, idx0)];
-    } else {
-        order.splice(idx0, 1);
-        order.unshift(0);
-        localSearch(order, dist, round);
-        return order;
-    }
+// --- Perturbatie: double-bridge in een lokaal venster ---
+function doubleBridge(path) {
+    const L = path.length - 1;
+    const inner = L - 1;                 // posities 1..L-1 zijn vrij
+    if (inner < 8) return path.slice();
+    const win = Math.min(inner, 50);
+    const start = 1 + Math.floor(Math.random() * (inner - win + 1));
+    const cuts = new Set();
+    while (cuts.size < 3) cuts.add(start + Math.floor(Math.random() * win));
+    const [a, b, c] = [...cuts].sort((x, y) => x - y);
+    return path.slice(0, a).concat(path.slice(b, c), path.slice(a, b), path.slice(c));
 }
 
 // --- Hoofd-solver ---
-// roundTrip als parameter (geen toegang tot state in worker)
-function solveTSP(distanceMatrix, roundTrip) {
+function solveTSP(distanceMatrix, roundTrip, initialOrder, timeBudgetMs) {
     const n = distanceMatrix.length;
-    const round = roundTrip;
+    const round = !!roundTrip;
 
     if (n <= 1) return [0];
     if (n === 2) return [0, 1];
+    if (n <= 8 && !initialOrder) return bruteForce(distanceMatrix, n, round);
 
-    if (n <= 8) return bruteForce(distanceMatrix, n, round);
+    const t0 = Date.now();
+    const budget = timeBudgetMs || Math.min(2000, 300 + 8 * n);
+    const d = buildExtended(distanceMatrix, round);
+    const nb = buildNeighbors(d, n + 1);
 
-    let globalBest = null;
-    let globalBestCost = Infinity;
+    let best = null;
+    const consider = (path) => {
+        const t = new Tour(d, path);
+        localSearch(t, nb);
+        if (!best || t.cost() < best.cost() - EPS) best = t;
+    };
 
-    function tryCandidate(order) {
-        order = normalizeOrder(order, distanceMatrix, round);
-        const cost = routeCost(order, distanceMatrix, round);
-        if (cost < globalBestCost) { globalBestCost = cost; globalBest = [...order]; }
+    if (initialOrder && initialOrder.length === n && initialOrder[0] === 0) {
+        consider(initialOrder.concat([n]));
+    }
+    consider(nearestNeighborPath(d, n, false));
+    for (let r = 0; r < 4 && Date.now() - t0 < budget / 4; r++) {
+        consider(nearestNeighborPath(d, n, true));
     }
 
-    for (let start = 0; start < n; start++) {
-        const order = nearestNeighbor(distanceMatrix, n, start);
-        localSearch(order, distanceMatrix, round);
-        tryCandidate(order);
-        if (round) {
-            const rev = [order[0], ...order.slice(1).reverse()];
-            localSearch(rev, distanceMatrix, round);
-            tryCandidate(rev);
+    // Iterated Local Search tot het tijdsbudget op is of er lang niks verbetert
+    const maxStale = Math.max(1500, 30 * n);
+    let stale = 0;
+    while (Date.now() - t0 < budget && stale < maxStale) {
+        for (let k = 0; k < 20; k++) {
+            const t = new Tour(d, doubleBridge(best.p));
+            localSearch(t, nb);
+            if (t.cost() < best.cost() - EPS) { best = t; stale = 0; } else stale++;
         }
     }
 
-    // ILS perturbatie: meer kicks = beter ontsnappen uit lokale optima
-    // Voor n=95 is elke kick ~2ms in de worker, dus 200 kicks ≈ 0.4s extra
-    const kicks = n <= 20 ? 200 : (n <= 50 ? 150 : (n <= 150 ? 200 : 60));
-    for (let k = 0; k < kicks; k++) {
-        const order = doubleBridge([...globalBest]);
-        localSearch(order, distanceMatrix, round);
-        tryCandidate(order);
-        // Probeer ook de omgekeerde versie van de perturbatie
-        if (round) {
-            const rev = [order[0], ...order.slice(1).reverse()];
-            localSearch(rev, distanceMatrix, round);
-            tryCandidate(rev);
-        }
-    }
-
-    return globalBest;
+    return best.p.slice(0, n); // eindknoop eraf
 }
 
-// --- Worker message handler ---
-self.onmessage = function (e) {
-    const { distances, roundTrip } = e.data;
-    const order = solveTSP(distances, roundTrip);
-    self.postMessage({ order });
-};
+// --- Worker message handler (niet als dit bestand als gewoon script in de pagina laadt) ---
+if (typeof WorkerGlobalScope !== 'undefined' && self instanceof WorkerGlobalScope) {
+    self.onmessage = function (e) {
+        const { distances, roundTrip, initialOrder, timeBudgetMs } = e.data;
+        const order = solveTSP(distances, roundTrip, initialOrder, timeBudgetMs);
+        self.postMessage({ order });
+    };
+}

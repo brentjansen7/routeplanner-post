@@ -33,6 +33,8 @@ function initApp() {
         nextId: 1,
         travelMode: 'driving',  // 'driving', 'cycling', or 'foot'
         roundTrip: false,
+        stopSeconds: 30,    // tijd per adres (afgeven, afstappen)
+        startTime: '',      // 'HH:MM', leeg = nu
         // Bezorg-modus
         bezorgModus: false,
         bezorgStatus: {},   // { stopId: 'bezorgd' | 'niet-thuis' }
@@ -86,6 +88,9 @@ function initApp() {
     const mapsRouteBtns  = document.getElementById('maps-route-btns');
     const courierCountInput = document.getElementById('courier-count');
     const importFileInput   = document.getElementById('import-file');
+    const stopSecondsInput  = document.getElementById('stop-seconds');
+    const startTimeInput    = document.getElementById('start-time');
+    const timeBreakdown     = document.getElementById('time-breakdown');
 
     // --- Marker creation ---
     function createNumberedIcon(number, total) {
@@ -439,44 +444,137 @@ function initApp() {
         return { distances, durations };
     }
 
-    // Haversine fallback matrix (if all routing services fail)
+    // Schatting via hemelsbrede afstand (fallback als routing-server faalt)
+    function estimateLeg(a, b) {
+        // ~13 km/u fiets, ~4,5 km/u lopen, ~40 km/u auto (incl. bochten/stoplichten)
+        const speed = state.travelMode === 'cycling' ? 3.6
+            : state.travelMode === 'foot' ? 1.25 : 11;
+        const distance = haversineDistance(a.lat, a.lng, b.lat, b.lng) * 1.35;
+        return { distance, duration: distance / speed };
+    }
+
     function buildHaversineMatrix(stops) {
         const n = stops.length;
         const distances = Array.from({ length: n }, () => new Array(n).fill(0));
         const durations = Array.from({ length: n }, () => new Array(n).fill(0));
-        const speed = state.travelMode === 'cycling' ? 4.2
-            : state.travelMode === 'foot' ? 1.4 : 11;
-        const roadFactor = 1.35;
         for (let i = 0; i < n; i++) {
             for (let j = 0; j < n; j++) {
                 if (i === j) continue;
-                const d = haversineDistance(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng) * roadFactor;
-                distances[i][j] = d;
-                durations[i][j] = d / speed;
+                const leg = estimateLeg(stops[i], stops[j]);
+                distances[i][j] = leg.distance;
+                durations[i][j] = leg.duration;
             }
         }
         return { distances, durations };
     }
 
-    // --- Distance Matrix (BRouter for bike/foot, OSRM for driving) ---
-    async function getDistanceMatrix(stops) {
-        // For cycling/walking: always use Haversine for the matrix.
-        // BRouter needs n*(n-1) individual requests which takes too long even for small sets.
-        // BRouter is still used for the final route geometry (one request).
-        if (brouterProfile()) {
-            return buildHaversineMatrix(stops);
+    // OSRM-servers per vervoersmiddel (echte fiets- en looproutes via FOSSGIS)
+    const OSRM_HOSTS = {
+        driving: 'https://router.project-osrm.org',
+        cycling: 'https://routing.openstreetmap.de/routed-bike',
+        foot: 'https://routing.openstreetmap.de/routed-foot',
+    };
+    function osrmHost() {
+        return OSRM_HOSTS[state.travelMode] || OSRM_HOSTS.driving;
+    }
+
+    // Reistijd-matrix via OSRM /table. De servers accepteren max 100 punten
+    // per request, dus grotere sets gaan in blokken van 50×50. Blokken die mislukken
+    // of niet voor de deadline klaar zijn worden geschat, de rest blijft echt.
+    async function osrmTable(stops, deadline) {
+        const n = stops.length;
+        const host = osrmHost();
+        const distances = Array.from({ length: n }, () => new Array(n).fill(0));
+        const durations = Array.from({ length: n }, () => new Array(n).fill(0));
+        const range = (from, to) => Array.from({ length: to - from }, (_, k) => from + k);
+
+        const jobs = [];
+        if (n <= 100) {
+            jobs.push({ src: range(0, n), dst: range(0, n), whole: true });
+        } else {
+            const BLOCK = 50;
+            for (let s = 0; s < n; s += BLOCK) {
+                for (let d = 0; d < n; d += BLOCK) {
+                    jobs.push({ src: range(s, Math.min(s + BLOCK, n)), dst: range(d, Math.min(d + BLOCK, n)) });
+                }
+            }
         }
 
-        // OSRM for driving (or as fallback)
-        const coords = stops.map(s => `${s.lng},${s.lat}`).join(';');
-        try {
-            const url = `https://router.project-osrm.org/table/v1/driving/${coords}?annotations=duration,distance`;
-            const res = await fetchWithTimeout(url, {}, 15000);
-            const data = await res.json();
-            if (data.code === 'Ok') {
-                console.log('Distance matrix: using OSRM driving');
-                return { durations: data.durations, distances: data.distances };
+        let failed = 0;
+        function estimateJob(job) {
+            failed++;
+            job.src.forEach(i => job.dst.forEach(j => {
+                if (i === j) return;
+                const leg = estimateLeg(stops[i], stops[j]);
+                durations[i][j] = leg.duration;
+                distances[i][j] = leg.distance;
+            }));
+        }
+
+        async function runJob(job) {
+            if (Date.now() > deadline) return estimateJob(job);
+            const idx = job.whole ? job.src : [...new Set([...job.src, ...job.dst])];
+            const localOf = new Map(idx.map((g, l) => [g, l]));
+            const coords = idx.map(i => `${stops[i].lng.toFixed(6)},${stops[i].lat.toFixed(6)}`).join(';');
+            let url = `${host}/table/v1/driving/${coords}?annotations=duration,distance`;
+            if (!job.whole) {
+                url += `&sources=${job.src.map(i => localOf.get(i)).join(';')}`
+                    + `&destinations=${job.dst.map(i => localOf.get(i)).join(';')}`;
             }
+            // Gratis servers geven bij drukte soms een foutpagina: kort wachten en opnieuw
+            let data = null;
+            for (let attempt = 0; ; attempt++) {
+                try {
+                    const left = deadline - Date.now();
+                    const res = await fetchWithTimeout(url, {}, Math.max(3000, Math.min(20000, left)));
+                    if (!res.ok) throw new Error(`OSRM table HTTP ${res.status}`);
+                    data = await res.json();
+                    if (data.code !== 'Ok') throw new Error(`OSRM table: ${data.code}`);
+                    break;
+                } catch (err) {
+                    const wait = 1000 * (attempt + 1);
+                    if (attempt >= 2 || Date.now() + wait > deadline) {
+                        console.warn('OSRM table blok mislukt:', err.message);
+                        return estimateJob(job);
+                    }
+                    await new Promise(r => setTimeout(r, wait));
+                }
+            }
+            job.src.forEach((i, a) => {
+                job.dst.forEach((j, b) => {
+                    if (i === j) return;
+                    const dur = data.durations[a][b];
+                    const dist = data.distances ? data.distances[a][b] : null;
+                    if (dur === null || dist === null) {
+                        // Onbereikbaar paar: schatten i.p.v. de hele matrix weggooien
+                        const leg = estimateLeg(stops[i], stops[j]);
+                        durations[i][j] = leg.duration;
+                        distances[i][j] = leg.distance;
+                    } else {
+                        durations[i][j] = dur;
+                        distances[i][j] = dist;
+                    }
+                });
+            });
+        }
+
+        // Max 2 requests tegelijk: meer weigeren de gratis servers
+        let next = 0;
+        const workers = Array.from({ length: Math.min(2, jobs.length) }, async () => {
+            while (next < jobs.length) await runJob(jobs[next++]);
+        });
+        await Promise.all(workers);
+        if (failed === jobs.length) throw new Error('OSRM table: geen enkel blok gelukt');
+        if (failed) console.warn(`OSRM table: ${failed} van ${jobs.length} blokken geschat`);
+        return { distances, durations };
+    }
+
+    // --- Distance Matrix (OSRM per vervoersmiddel, Haversine als fallback) ---
+    async function getDistanceMatrix(stops, deadline = Date.now() + 15000) {
+        try {
+            const matrix = await osrmTable(stops, deadline);
+            console.log(`Distance matrix: OSRM ${state.travelMode} (${stops.length} stops)`);
+            return matrix;
         } catch (err) {
             console.warn('OSRM table failed:', err);
         }
@@ -509,321 +607,77 @@ function initApp() {
             }
         }
 
-        // OSRM for driving (or as fallback)
+        // OSRM for driving (or as fallback, met het profiel van het vervoersmiddel)
         const coords = stops.map(s => `${s.lng},${s.lat}`).join(';');
-        const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=true`;
+        const url = `${osrmHost()}/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=true`;
         const res = await fetchWithTimeout(url, {}, 15000);
         const data = await res.json();
         if (data.code !== 'Ok') {
             throw new Error('Kon geen route berekenen. Controleer je internetverbinding.');
         }
-        console.log('Route geometry: using OSRM driving');
+        console.log(`Route geometry: using OSRM ${state.travelMode}`);
         return data.routes[0];
     }
 
-    // ================================================================
-    // TSP Solver — Production-grade route optimizer
-    // Brute-force for ≤8 stops, multi-start NN + 2-opt + or-opt +
-    // double-bridge perturbation for larger sets. Handles both open
-    // and round-trip routes correctly.
-    // ================================================================
-
-    // --- Cost helpers ---
-
-    function routeCost(order, dist, round) {
-        let c = 0;
-        for (let i = 0; i < order.length - 1; i++) c += dist[order[i]][order[i + 1]];
-        if (round) c += dist[order[order.length - 1]][order[0]];
-        return c;
-    }
-
-    // --- Brute-force for small n (≤ 8) ---
-
-    function bruteForce(dist, n, round) {
-        // Fix node 0 as start, permute the rest
-        const rest = [];
-        for (let i = 1; i < n; i++) rest.push(i);
-
-        let bestCost = Infinity;
-        let bestOrder = null;
-
-        function permute(arr, l) {
-            if (l === arr.length) {
-                const order = [0, ...arr];
-                const c = routeCost(order, dist, round);
-                if (c < bestCost) {
-                    bestCost = c;
-                    bestOrder = [...order];
-                }
-                return;
-            }
-            for (let i = l; i < arr.length; i++) {
-                [arr[l], arr[i]] = [arr[i], arr[l]];
-                permute(arr, l + 1);
-                [arr[l], arr[i]] = [arr[i], arr[l]];
-            }
-        }
-
-        permute(rest, 0);
-        return bestOrder;
-    }
-
-    // --- Nearest Neighbor heuristic ---
-
-    function nearestNeighbor(dist, n, startIdx) {
-        const visited = new Set([startIdx]);
-        const order = [startIdx];
-        while (visited.size < n) {
-            const cur = order[order.length - 1];
-            let best = -1, bestD = Infinity;
-            for (let i = 0; i < n; i++) {
-                if (!visited.has(i) && dist[cur][i] < bestD) {
-                    bestD = dist[cur][i];
-                    best = i;
-                }
-            }
-            visited.add(best);
-            order.push(best);
-        }
-        return order;
-    }
-
-    // --- 2-opt (handles both open and round-trip correctly) ---
-
-    function improve2Opt(order, dist, round) {
-        const n = order.length;
-        let improved = true;
-        while (improved) {
-            improved = false;
-            // i = 1 keeps node 0 fixed as start
-            for (let i = 1; i < n - 1; i++) {
-                for (let j = i + 1; j < n; j++) {
-                    let delta;
-                    if (j === n - 1 && !round) {
-                        // Open route, reversing tail: only one edge changes
-                        // Before: edge(i-1 -> i)  After: edge(i-1 -> j)
-                        delta = dist[order[i - 1]][order[j]] - dist[order[i - 1]][order[i]];
-                    } else {
-                        // Standard 2-opt: two edges change
-                        const nextJ = (j + 1 < n) ? order[j + 1] : order[0]; // wraps for round trip
-                        const before = dist[order[i - 1]][order[i]] + dist[order[j]][nextJ];
-                        const after = dist[order[i - 1]][order[j]] + dist[order[i]][nextJ];
-                        delta = after - before;
-                    }
-                    if (delta < -1e-6) {
-                        // Reverse segment [i..j]
-                        let lo = i, hi = j;
-                        while (lo < hi) {
-                            [order[lo], order[hi]] = [order[hi], order[lo]];
-                            lo++; hi--;
-                        }
-                        improved = true;
-                    }
-                }
-            }
-        }
-    }
-
-    // --- Or-opt: relocate segments of length 1, 2, 3 ---
-
-    function improveOrOpt(order, dist, round) {
-        const n = order.length;
-        let improved = true;
-        while (improved) {
-            improved = false;
-            for (let segLen = 1; segLen <= Math.min(3, n - 2); segLen++) {
-                for (let i = 1; i < n; i++) {
-                    if (i + segLen > n) continue;
-                    const endI = i + segLen - 1;
-
-                    // Nodes around the removed segment
-                    const prev = order[i - 1];
-                    const segFirst = order[i];
-                    const segLast = order[endI];
-                    const hasNext = (endI + 1 < n);
-                    const next = hasNext ? order[endI + 1] : (round ? order[0] : null);
-
-                    // Cost of the two/one edges being removed by extraction
-                    const removeCost = dist[prev][segFirst]
-                        + (next !== null ? dist[segLast][next] : 0);
-                    // Cost of the bridge after removal
-                    const bridgeCost = (next !== null) ? dist[prev][next] : 0;
-                    const removalGain = removeCost - bridgeCost;
-
-                    // Try every insertion position (edge between j and j+1)
-                    for (let j = 0; j < n; j++) {
-                        // Skip positions that overlap with the segment
-                        if (j >= i - 1 && j <= endI) continue;
-
-                        const jNext = (j + 1 < n) ? order[j + 1] : (round ? order[0] : null);
-                        if (jNext === null) continue;
-
-                        const insertCost = dist[order[j]][segFirst] + dist[segLast][jNext]
-                            - dist[order[j]][jNext];
-
-                        if (insertCost - removalGain < -1e-6) {
-                            // Perform move
-                            const segment = order.splice(i, segLen);
-                            const insertPos = j < i ? j + 1 : j + 1 - segLen;
-                            order.splice(insertPos, 0, ...segment);
-                            improved = true;
-                            break;
-                        }
-                    }
-                    if (improved) break;
-                }
-                if (improved) break;
-            }
-        }
-    }
-
-    // --- Full local search: alternate 2-opt and or-opt until no improvement ---
-
-    function localSearch(order, dist, round) {
-        let prevCost = routeCost(order, dist, round);
-        for (let iter = 0; iter < 20; iter++) {
-            improve2Opt(order, dist, round);
-            improveOrOpt(order, dist, round);
-            const newCost = routeCost(order, dist, round);
-            if (prevCost - newCost < 0.001) break;
-            prevCost = newCost;
-        }
-    }
-
-    // --- Double-bridge perturbation (breaks out of local optima) ---
-
-    function doubleBridge(order) {
-        const n = order.length;
-        if (n < 6) return [...order];
-
-        // Pick 3 random cut points (keeping node 0 fixed)
-        const cuts = [];
-        while (cuts.length < 3) {
-            const c = 1 + Math.floor(Math.random() * (n - 2));
-            if (!cuts.includes(c)) cuts.push(c);
-        }
-        cuts.sort((a, b) => a - b);
-
-        const seg1 = order.slice(0, cuts[0]);
-        const seg2 = order.slice(cuts[0], cuts[1]);
-        const seg3 = order.slice(cuts[1], cuts[2]);
-        const seg4 = order.slice(cuts[2]);
-
-        // Reconnect in a different order: seg1 + seg3 + seg2 + seg4
-        return [...seg1, ...seg3, ...seg2, ...seg4];
-    }
-
-    // --- Normalize: ensure node 0 is at position 0 ---
-
-    function normalizeOrder(order, dist, round) {
-        const idx0 = order.indexOf(0);
-        if (idx0 === 0) return order;
-
-        if (round) {
-            // Cycle: rotate so 0 is first (cost doesn't change)
-            return [...order.slice(idx0), ...order.slice(0, idx0)];
-        } else {
-            // Open route: move 0 to front, re-optimize rest
-            order.splice(idx0, 1);
-            order.unshift(0);
-            localSearch(order, dist, round);
-            return order;
-        }
-    }
-
-    // --- Main solver ---
-
-    function solveTSP(distanceMatrix) {
-        const n = distanceMatrix.length;
-        const round = state.roundTrip;
-
-        if (n <= 1) return [0];
-        if (n === 2) return [0, 1];
-
-        // Brute-force for small inputs — guarantees optimal result
-        if (n <= 8) {
-            return bruteForce(distanceMatrix, n, round);
-        }
-
-        // --- Larger inputs: multi-start NN + local search + perturbation ---
-
-        let globalBest = null;
-        let globalBestCost = Infinity;
-
-        function tryCandidate(order) {
-            // Always normalize so node 0 is first
-            order = normalizeOrder(order, distanceMatrix, round);
-            const cost = routeCost(order, distanceMatrix, round);
-            if (cost < globalBestCost) {
-                globalBestCost = cost;
-                globalBest = [...order];
-            }
-        }
-
-        // Phase 1: Multi-start nearest neighbor from every node
-        for (let start = 0; start < n; start++) {
-            const order = nearestNeighbor(distanceMatrix, n, start);
-            localSearch(order, distanceMatrix, round);
-            tryCandidate(order);
-
-            // For round trips, also try the reverse direction
-            if (round) {
-                const rev = [order[0], ...order.slice(1).reverse()];
-                localSearch(rev, distanceMatrix, round);
-                tryCandidate(rev);
-            }
-        }
-
-        // Phase 2: Perturbation — double-bridge kicks to escape local optima
-        const kicks = n <= 20 ? 200 : (n <= 50 ? 150 : (n <= 150 ? 200 : 60));
-        for (let k = 0; k < kicks; k++) {
-            const order = doubleBridge([...globalBest]);
-            localSearch(order, distanceMatrix, round);
-            tryCandidate(order);
-        }
-
-        return globalBest;
-    }
-
     // --- Web Worker wrapper voor TSP (geen UI-bevriezing) ---
-    function solveTSPAsync(distances, roundTrip) {
-        return new Promise((resolve, reject) => {
+    // Solver zelf staat in tsp-worker.js (ook als gewoon script geladen voor de fallback)
+    function solveTSPAsync(distances, roundTrip, opts = {}) {
+        const { initialOrder = null, timeBudgetMs } = opts;
+        return new Promise((resolve) => {
+            const fallback = () => resolve(solveTSP(distances, roundTrip, initialOrder, timeBudgetMs));
             try {
                 const worker = new Worker('tsp-worker.js');
                 worker.onmessage = e => { worker.terminate(); resolve(e.data.order); };
-                worker.onerror = e => { worker.terminate(); reject(e); };
-                worker.postMessage({ distances, roundTrip });
+                worker.onerror = () => { worker.terminate(); fallback(); };
+                worker.postMessage({ distances, roundTrip, initialOrder, timeBudgetMs });
             } catch (e) {
                 // Fallback als Web Workers niet beschikbaar zijn
-                resolve(solveTSP(distances));
+                fallback();
             }
         });
     }
 
     // --- Grote routes: clustering + per-cluster TSP ---
     async function optimizeWithClustering(routingStops) {
-        const k = clusterCount(routingStops.length);
+        const n = routingStops.length;
+        const k = clusterCount(n);
         // Voeg tijdelijke _origIdx toe om originele indices te bewaren
         const stopsWithIdx = routingStops.map((s, i) => ({ ...s, _origIdx: i }));
         const clusters = splitIntoClusters(stopsWithIdx, k);
         const orderedClusters = orderClusters(clusters);
 
+        // Gecombineerde matrix: hemelsbreed tussen clusters, echte tijden binnen een cluster
+        const matrix = buildHaversineMatrix(routingStops);
+        const labelOf = new Array(n);
         const globalOrder = [];
-        const clusterLabelsArr = [];
         let clusterIdx = 0;
+        const deadline = Date.now() + 30000; // daarna schatten voor de overige clusters
 
         for (const cluster of orderedClusters) {
             const origIndices = cluster.map(s => s._origIdx);
             const clusterStops = origIndices.map(i => routingStops[i]);
-            const matrix = await getDistanceMatrix(clusterStops);
-            const localOrder = await solveTSPAsync(matrix.durations, state.roundTrip);
+            const cm = await getDistanceMatrix(clusterStops, deadline);
+            origIndices.forEach((gi, a) => origIndices.forEach((gj, b) => {
+                matrix.durations[gi][gj] = cm.durations[a][b];
+                matrix.distances[gi][gj] = cm.distances[a][b];
+            }));
+            // Binnen een cluster altijd een open pad; het rondje wordt globaal geregeld
+            const localOrder = await solveTSPAsync(cm.durations, false, { timeBudgetMs: 300 });
             for (const localIdx of localOrder) {
                 globalOrder.push(origIndices[localIdx]);
-                clusterLabelsArr.push(clusterIdx);
+                labelOf[origIndices[localIdx]] = clusterIdx;
             }
             clusterIdx++;
         }
-        return { order: globalOrder, clusterLabels: clusterLabelsArr };
+
+        // Stop 0 blijft het startpunt
+        const zeroPos = globalOrder.indexOf(0);
+        if (zeroPos > 0) { globalOrder.splice(zeroPos, 1); globalOrder.unshift(0); }
+
+        // Eén globale verbeterronde tegen heen-en-weer springen tussen clusters
+        const order = await solveTSPAsync(matrix.durations, state.roundTrip,
+            { initialOrder: globalOrder, timeBudgetMs: 1500 });
+        return { order, clusterLabels: order.map(i => labelOf[i]), matrix };
     }
 
     // --- Bezorger-routes weergeven in samenvatting ---
@@ -1002,12 +856,12 @@ function initApp() {
 
             // Kies optimalisatiestrategie op basis van aantal stops
             let optimalOrder, matrix, clusterLabels;
-            if (state.stops.length > 150) {
-                // Zeer grote route (>150): clusteren om worker-tijd te beperken
+            if (state.stops.length > 250) {
+                // Zeer grote route (>250): clusteren om aantal matrix-requests te beperken
                 const result = await optimizeWithClustering(routingStops);
                 optimalOrder = result.order;
                 clusterLabels = result.clusterLabels;
-                matrix = buildHaversineMatrix(routingStops);
+                matrix = result.matrix;
             } else {
                 // Kleine route: directe matrix + TSP via web worker
                 matrix = await getDistanceMatrix(routingStops);
@@ -1084,12 +938,13 @@ function initApp() {
         clearRouteLine();
         routeSummary.classList.add('hidden');
         state.optimized = false;
+        state._lastRouteArgs = null;
     }
 
     async function drawRouteFromStops() {
         if (state.stops.length < 2) return;
         try {
-            const routeStops = state.stops.map(s => [s.lat, s.lng]);
+            const routeStops = state.stops.map(s => ({ lat: s.lat, lng: s.lng }));
             const route = await getRoute(routeStops);
             drawRoute(route);
         } catch (err) {
@@ -1101,16 +956,28 @@ function initApp() {
     function showRouteSummary(route, matrix, order, deliveryPoints) {
         state._lastRouteArgs = [route, matrix, order, deliveryPoints];
         const distKm = (route.distance / 1000).toFixed(1);
-        const durMin = Math.round(route.duration / 60);
-        const hours = Math.floor(durMin / 60);
-        const mins = durMin % 60;
+
+        // Reistijd = som van de etappes uit de matrix, plus vaste tijd per adres
+        const stopSec = state.stopSeconds;
+        const legSec = order.map((cur, i) => i === 0 ? 0 : matrix.durations[order[i - 1]][cur]);
+        const returnSec = state.roundTrip && order.length >= 2
+            ? matrix.durations[order[order.length - 1]][order[0]] : 0;
+        const travelSec = legSec.reduce((s, x) => s + x, 0) + returnSec;
+        const serviceSec = state.stops.length * stopSec;
+        state._lastTravelSeconds = travelSec;
+
+        const start = getStartDate();
+        const clockAt = sec => formatClock(new Date(start.getTime() + sec * 1000));
 
         totalDistance.textContent = `${distKm} km`;
-        totalTime.textContent = hours > 0 ? `${hours}u ${mins}m` : `${mins} min`;
+        totalTime.textContent = formatDuration(travelSec + serviceSec);
         totalStops.textContent = state.stops.length;
+        timeBreakdown.textContent = `${formatDuration(travelSec)} onderweg + ${formatDuration(serviceSec)} bij adressen`
+            + ` · klaar ± ${clockAt(travelSec + serviceSec)}`;
 
         // Build step-by-step
         routeSteps.innerHTML = '';
+        let elapsed = 0;
         state.stops.forEach((stop, i) => {
             const div = document.createElement('div');
             div.className = 'route-step';
@@ -1121,9 +988,10 @@ function initApp() {
                 const curIdx = order[i];
                 const segDist = (matrix.distances[prevIdx][curIdx] / 1000).toFixed(1);
                 const segDur = Math.round(matrix.durations[prevIdx][curIdx] / 60);
-                distText = `${segDist} km / ${segDur} min`;
+                elapsed += stopSec + legSec[i];
+                distText = `${segDist} km / ${segDur} min · ${clockAt(elapsed)}`;
             } else {
-                distText = 'Start';
+                distText = `Start · ${clockAt(0)}`;
             }
 
             // Show mailbox side indicator (voorkant/achterkant)
@@ -1200,7 +1068,7 @@ function initApp() {
             div.innerHTML = `
                 <span class="step-number">&#8634;</span>
                 <span class="step-info">Terug naar: ${escapeHtml(state.stops[0].name)}</span>
-                <span class="step-distance">${segDist} km / ${segDur} min</span>
+                <span class="step-distance">${segDist} km / ${segDur} min · ${clockAt(travelSec + serviceSec)}</span>
             `;
             routeSteps.appendChild(div);
         }
@@ -1235,6 +1103,18 @@ function initApp() {
         const remainMins = mins % 60;
         if (hours > 0) return `${hours}u ${remainMins}m`;
         return `${mins} min`;
+    }
+
+    function formatClock(date) {
+        return date.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    // Starttijd uit het veld (vandaag), of nu als het leeg is
+    function getStartDate() {
+        const d = new Date();
+        const m = /^(\d{1,2}):(\d{2})$/.exec(state.startTime || '');
+        if (m) d.setHours(+m[1], +m[2], 0, 0);
+        return d;
     }
 
     // --- Event listeners ---
@@ -1339,6 +1219,29 @@ function initApp() {
     roundTripCheckbox.addEventListener('change', () => {
         state.roundTrip = roundTripCheckbox.checked;
         clearRoute();
+    });
+
+    // Tijd per adres + starttijd: alleen de tijden opnieuw berekenen, niet de route
+    try {
+        const saved = parseInt(localStorage.getItem('stopSeconds'));
+        if (!isNaN(saved)) state.stopSeconds = saved;
+    } catch (e) { /* localStorage niet beschikbaar */ }
+    stopSecondsInput.value = state.stopSeconds;
+
+    function refreshRouteTimes() {
+        if (state.optimized && state._lastRouteArgs) showRouteSummary(...state._lastRouteArgs);
+    }
+
+    stopSecondsInput.addEventListener('input', () => {
+        const v = parseInt(stopSecondsInput.value);
+        state.stopSeconds = isNaN(v) ? 0 : Math.max(0, Math.min(600, v));
+        try { localStorage.setItem('stopSeconds', String(state.stopSeconds)); } catch (e) { /* negeren */ }
+        refreshRouteTimes();
+    });
+
+    startTimeInput.addEventListener('input', () => {
+        state.startTime = startTimeInput.value;
+        refreshRouteTimes();
     });
 
     // Optimize
@@ -1711,14 +1614,16 @@ function initApp() {
             opgeslagenOp: new Date().toLocaleDateString('nl-NL'),
             roundTrip: state.roundTrip,
             courierCount: state.courierCount,
+            stopSeconds: state.stopSeconds,
+            startTime: state.startTime,
         };
 
         // Sla ook routegegevens op als de route is geoptimaliseerd
         if (state.optimized && state._lastRouteArgs) {
-            const [route, matrix] = state._lastRouteArgs;
+            const [route] = state._lastRouteArgs;
             routeData.isOptimized = true;
             routeData.distance = route.distance;
-            routeData.duration = route.duration;
+            routeData.duration = state._lastTravelSeconds; // alleen onderweg, zonder tijd per adres
             routeData.courierRoutes = state.courierRoutes;
         }
 
@@ -1754,6 +1659,14 @@ function initApp() {
             state.courierCount = route.courierCount;
             courierCountInput.value = route.courierCount;
         }
+        if (route.stopSeconds !== undefined) {
+            state.stopSeconds = route.stopSeconds;
+            stopSecondsInput.value = route.stopSeconds;
+        }
+        if (route.startTime !== undefined) {
+            state.startTime = route.startTime;
+            startTimeInput.value = route.startTime;
+        }
 
         // Als dit een geoptimaliseerde route is, toon de opgeslagen routegegevens
         if (route.isOptimized && route.distance !== undefined) {
@@ -1762,11 +1675,11 @@ function initApp() {
             routeSummary.classList.remove('hidden');
             // Toon opgeslagen routegegevens
             const distKm = (route.distance / 1000).toFixed(1);
-            const durMin = Math.round(route.duration / 60);
-            const hours = Math.floor(durMin / 60);
-            const mins = durMin % 60;
+            const travelSec = route.duration || 0;
+            const serviceSec = state.stops.length * state.stopSeconds;
             totalDistance.textContent = `${distKm} km`;
-            totalTime.textContent = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+            totalTime.textContent = formatDuration(travelSec + serviceSec);
+            timeBreakdown.textContent = `${formatDuration(travelSec)} onderweg + ${formatDuration(serviceSec)} bij adressen`;
             totalStops.textContent = state.stops.length;
 
             // Teken de route opnieuw
@@ -2102,9 +2015,19 @@ function initApp() {
                 const qrDiv = btn.closest('div[style]').nextElementSibling;
                 if (qrDiv.style.display === 'none') {
                     qrDiv.style.display = '';
-                    qrDiv.innerHTML = `<img src="${btn.dataset.qr}" alt="QR code bezorger"
-                        style="border-radius:8px;border:1px solid #ddd;" />
-                        <p style="font-size:11px;color:#888;margin:4px 0 0;">Laat bezorger scannen</p>`;
+                    qrDiv.textContent = '';
+                    const qrSrc = btn.dataset.qr;
+                    if (qrSrc && qrSrc.startsWith('https://api.qrserver.com/')) {
+                        const img = document.createElement('img');
+                        img.src = qrSrc;
+                        img.alt = 'QR code bezorger';
+                        img.style.cssText = 'border-radius:8px;border:1px solid #ddd;';
+                        const p = document.createElement('p');
+                        p.style.cssText = 'font-size:11px;color:#888;margin:4px 0 0;';
+                        p.textContent = 'Laat bezorger scannen';
+                        qrDiv.appendChild(img);
+                        qrDiv.appendChild(p);
+                    }
                     btn.textContent = '✕ Verberg QR';
                 } else {
                     qrDiv.style.display = 'none';
