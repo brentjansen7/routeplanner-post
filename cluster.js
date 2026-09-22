@@ -20,13 +20,16 @@ function clusterCount(n) {
 
 // k-means++ initialisatie + iteraties op GPS-coördinaten
 // Geeft array terug van cluster-indices (1 per stop)
-function kMeans(stops, k, maxIter = 100) {
+// startIdx = welke stop het eerste zwaartepunt wordt; met een andere
+// startIdx krijg je een andere indeling, handig om er meerdere te proberen.
+function kMeans(stops, k, maxIter = 100, startIdx = 0) {
     if (stops.length <= k) {
         return stops.map((_, i) => i);
     }
 
     // k-means++ initialisatie: verspreide startpunten
-    const centroids = [{ lat: stops[0].lat, lng: stops[0].lng }];
+    const eerste = stops[startIdx % stops.length];
+    const centroids = [{ lat: eerste.lat, lng: eerste.lng }];
     for (let c = 1; c < k; c++) {
         let farthest = 0, farthestDist = -1;
         for (let i = 0; i < stops.length; i++) {

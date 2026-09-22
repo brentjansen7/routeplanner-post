@@ -754,11 +754,20 @@ function initApp() {
             const dur = (a, b) => matrix.durations[a][b];
             const dist = (a, b) => matrix.distances[a][b];
 
-            let routes = sweepVerdeling(routingStops, n, start, dur, endIdx);
+            let routes = verdeelOverGebieden(routingStops, n, start, dur, endIdx);
             routes = await Promise.all(routes.map(g => tspVoorGroep(g, dur, endIdx, n)));
             if (n > 1) {
-                routes = verbeterDoorRuilen(routes, dur, endIdx, 1500);
-                routes = await Promise.all(routes.map(g => tspVoorGroep(g, dur, endIdx, n)));
+                // Afwisselend stops verschuiven en de deelroutes opnieuw oplossen,
+                // tot het niet korter meer wordt
+                const grenzen = groepsGrenzen(m, n);
+                for (let ronde = 0; ronde < 4; ronde++) {
+                    const voor = totaleRijtijd(routes, dur, endIdx);
+                    routes = verbeterTussenBezorgers(routes, dur, endIdx, grenzen, 1200);
+                    routes = await Promise.all(routes.map(g => tspVoorGroep(g, dur, endIdx, n)));
+                    if (totaleRijtijd(routes, dur, endIdx) >= voor - 1e-6) break;
+                }
+                console.log('Verdeling per bezorger:', routes.map(r => r.length).join(' / '),
+                    `· totaal ${Math.round(totaleRijtijd(routes, dur, endIdx) / 60)} min rijden`);
             }
             return { routes, stats: routes.map(r => berekenBezorgerStats(r, dur, dist, endIdx)) };
         }
@@ -768,8 +777,10 @@ function initApp() {
         console.log(`Grote route (${m} stops): splitsen op hoek, matrix per bezorger`);
         const hav = buildHaversineMatrix(nodes);
         const hdur = (a, b) => hav.durations[a][b];
-        let groepen = sweepVerdeling(routingStops, n, start, hdur, endIdx);
-        if (n > 1) groepen = verbeterDoorRuilen(groepen, hdur, endIdx, 1000);
+        let groepen = verdeelOverGebieden(routingStops, n, start, hdur, endIdx);
+        if (n > 1) {
+            groepen = verbeterTussenBezorgers(groepen, hdur, endIdx, groepsGrenzen(m, n), 1000);
+        }
 
         const routes = [];
         const stats = [];
@@ -2592,7 +2603,8 @@ function initApp() {
 
     // Test-handles (alleen op localhost / file://)
     if (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.protocol === 'file:') {
-        window.__test = { state, map, startBezorgModus, updateBsScherm, addMarker };
+        window.__test = { state, map, startBezorgModus, updateBsScherm, addMarker,
+            getDistanceMatrix, verdeelEnOptimaliseer, tspVoorGroep };
     }
 
     })();
