@@ -1,10 +1,13 @@
 // tsp-worker.js - TSP solver in een Web Worker
-// Ontvangt: { distances: number[][], roundTrip: boolean, initialOrder?: number[], timeBudgetMs?: number }
+// Ontvangt: { distances: number[][], roundTrip: boolean, initialOrder?: number[],
+//             timeBudgetMs?: number, endCosts?: number[] }
 // Stuurt terug: { order: number[] }
 //
 // Aanpak: knoop 0 staat vast vooraan. We voegen een virtuele eindknoop toe
 // (open route: kost 0, rondje: kost terug naar 0), zodat open routes en
 // rondjes allebei een pad met vaste begin- en eindknoop zijn.
+// endCosts[i] = kosten van knoop i naar een gedeeld eindpunt dat zelf niet in
+// de matrix zit (apart eindadres). Gaat voor op roundTrip als het meegegeven is.
 // Werkt met asymmetrische matrices (eenrichtingsverkeer, fietspaden).
 
 'use strict';
@@ -13,15 +16,17 @@ const K_NEIGHBORS = 12;
 const EPS = 1e-6;
 
 // --- Kostenfunctie op de originele matrix ---
-function routeCost(order, dist, round) {
+function routeCost(order, dist, round, endCosts) {
     let c = 0;
     for (let i = 0; i < order.length - 1; i++) c += dist[order[i]][order[i + 1]];
-    if (round) c += dist[order[order.length - 1]][order[0]];
+    const last = order[order.length - 1];
+    if (endCosts) c += endCosts[last];
+    else if (round) c += dist[last][order[0]];
     return c;
 }
 
 // --- Brute-force voor kleine n (≤ 8) ---
-function bruteForce(dist, n, round) {
+function bruteForce(dist, n, round, endCosts) {
     const rest = [];
     for (let i = 1; i < n; i++) rest.push(i);
     let bestCost = Infinity;
@@ -30,7 +35,7 @@ function bruteForce(dist, n, round) {
     function permute(arr, l) {
         if (l === arr.length) {
             const order = [0, ...arr];
-            const c = routeCost(order, dist, round);
+            const c = routeCost(order, dist, round, endCosts);
             if (c < bestCost) { bestCost = c; bestOrder = [...order]; }
             return;
         }
@@ -45,13 +50,13 @@ function bruteForce(dist, n, round) {
 }
 
 // --- Matrix met virtuele eindknoop (index n) ---
-function buildExtended(dist, round) {
+function buildExtended(dist, round, endCosts) {
     const n = dist.length;
     const d = [];
     for (let i = 0; i < n; i++) {
         const row = new Float64Array(n + 1);
         for (let j = 0; j < n; j++) row[j] = dist[i][j];
-        row[n] = round ? dist[i][0] : 0;
+        row[n] = endCosts ? endCosts[i] : (round ? dist[i][0] : 0);
         d.push(row);
     }
     d.push(new Float64Array(n + 1)); // eindknoop heeft geen uitgaande kanten
@@ -222,17 +227,17 @@ function doubleBridge(path) {
 }
 
 // --- Hoofd-solver ---
-function solveTSP(distanceMatrix, roundTrip, initialOrder, timeBudgetMs) {
+function solveTSP(distanceMatrix, roundTrip, initialOrder, timeBudgetMs, endCosts) {
     const n = distanceMatrix.length;
     const round = !!roundTrip;
 
     if (n <= 1) return [0];
     if (n === 2) return [0, 1];
-    if (n <= 8 && !initialOrder) return bruteForce(distanceMatrix, n, round);
+    if (n <= 8 && !initialOrder) return bruteForce(distanceMatrix, n, round, endCosts);
 
     const t0 = Date.now();
     const budget = timeBudgetMs || Math.min(2000, 300 + 8 * n);
-    const d = buildExtended(distanceMatrix, round);
+    const d = buildExtended(distanceMatrix, round, endCosts);
     const nb = buildNeighbors(d, n + 1);
 
     let best = null;
@@ -267,8 +272,8 @@ function solveTSP(distanceMatrix, roundTrip, initialOrder, timeBudgetMs) {
 // --- Worker message handler (niet als dit bestand als gewoon script in de pagina laadt) ---
 if (typeof WorkerGlobalScope !== 'undefined' && self instanceof WorkerGlobalScope) {
     self.onmessage = function (e) {
-        const { distances, roundTrip, initialOrder, timeBudgetMs } = e.data;
-        const order = solveTSP(distances, roundTrip, initialOrder, timeBudgetMs);
+        const { distances, roundTrip, initialOrder, timeBudgetMs, endCosts } = e.data;
+        const order = solveTSP(distances, roundTrip, initialOrder, timeBudgetMs, endCosts);
         self.postMessage({ order });
     };
 }

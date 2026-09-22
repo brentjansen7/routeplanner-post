@@ -236,6 +236,55 @@ body {
 .suggestions-list li:hover { background: var(--surface-2); }
 
 /* ============================================================
+   START- EN EINDADRES (DEPOT)
+   ============================================================ */
+.depot-wrapper { position: relative; }
+
+.depot-input {
+    width: 100%;
+    padding: 9px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    color: var(--text);
+    box-sizing: border-box;
+}
+
+.depot-input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.depot-suggestions {
+    top: 100%;
+    left: 0;
+    right: 0;
+    margin-top: 4px;
+}
+
+/* Blok per bezorger in de samenvatting */
+.bezorger-blok {
+    border-radius: 10px;
+    margin-bottom: 8px;
+    overflow: hidden;
+}
+
+.bezorger-stappen {
+    padding: 0 10px 10px;
+    max-height: 320px;
+    overflow-y: auto;
+}
+
+/* Start- en eindregel in een stappenlijst */
+.step-number.depot-step {
+    background: var(--text);
+    color: #fff;
+    border-radius: 7px;
+}
+
+/* ============================================================
    IMPORT
    ============================================================ */
 .import-section { padding: 0 24px 16px; }
@@ -912,6 +961,25 @@ body {
     background: var(--danger);
     box-shadow: 0 2px 4px rgba(15,15,15,.12), 0 6px 16px rgba(239,68,68,.3);
 }
+
+/* Start- en eindadres: geen bezorgstop, dus een eigen vierkante marker */
+.depot-marker {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    color: #fff;
+    border-radius: 9px;
+    font-family: var(--font-mono);
+    font-size: 15px;
+    font-weight: 700;
+    border: 3px solid #fff;
+    box-shadow: 0 2px 4px rgba(15,15,15,.14), 0 6px 16px rgba(15,15,15,.2);
+}
+
+.depot-marker.depot-start { background: var(--success); }
+.depot-marker.depot-eind  { background: var(--danger); }
 
 .custom-marker.bezorgd {
     background: var(--success);

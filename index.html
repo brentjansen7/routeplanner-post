@@ -27,7 +27,7 @@
             <div class="sidebar-header">
                 <h1>Route Optimizer</h1>
                 <p class="subtitle">Optimaliseer je route met meerdere stops</p>
-                <p>v9.2</p>
+                <p>v9.3</p>
                 <a id="login-link" href="login.html" style="display:block;width:100%;padding:8px;margin-top:12px;text-align:center;background:#667eea;color:white;border-radius:6px;cursor:pointer;font-size:14px;text-decoration:none;box-sizing:border-box;">🔐 Inloggen</a>
                 <button id="logout-btn" style="display:none;width:100%;padding:8px;margin-top:12px;border:none;background:#f0f0f0;border-radius:6px;cursor:pointer;font-size:14px;">🚪 Uitloggen</button>
             </div>
@@ -103,6 +103,22 @@
                         <input type="checkbox" id="round-trip" />
                         <span>Rondje (start = eind)</span>
                     </label>
+                </div>
+                <div class="option-group">
+                    <label class="option-label">Startadres</label>
+                    <div class="depot-wrapper">
+                        <input type="text" id="start-address" class="depot-input" autocomplete="off"
+                            placeholder="Depot / vertrekpunt" />
+                        <ul id="start-suggestions" class="suggestions-list depot-suggestions"></ul>
+                    </div>
+                </div>
+                <div class="option-group">
+                    <label class="option-label">Eindadres</label>
+                    <div class="depot-wrapper">
+                        <input type="text" id="end-address" class="depot-input" autocomplete="off"
+                            placeholder="leeg = zelfde als start" />
+                        <ul id="end-suggestions" class="suggestions-list depot-suggestions"></ul>
+                    </div>
                 </div>
                 <div class="option-group">
                     <label class="option-label">Bezorgers</label>

@@ -28,6 +28,7 @@ function initApp() {
     const state = {
         stops: [],          // { id, name, lat, lng, marker }
         routeLine: null,
+        routeLines: [],     // één lijn per bezorger
         optimized: false,
         currentEtappe: 0,
         nextId: 1,
@@ -42,12 +43,23 @@ function initApp() {
         bezorgStart:  null, // Date
         bezorgOrder:  [],   // geoptimaliseerde volgorde (array van stop-objecten)
         bezorgIdx:    0,    // huidig stop-index in compact scherm
+        // Depot: gedeeld start- en eindadres (geen bezorgstops)
+        startPoint: null,   // { name, lat, lng }
+        endPoint: null,     // { name, lat, lng }, leeg = zelfde als start
+        startMarker: null,
+        endMarker: null,
         // Multi-bezorger
         courierCount: 1,
-        courierRoutes: [],
-        courierClusterLabels: null,
+        courierRoutes: [],  // array van arrays met stop-objecten
+        courierStats: [],   // per bezorger { rijSec, afstandM, legSec, ... }
+        courierPlans: [],   // per bezorger stops + stats + routegeometrie
         activeCourier: 0,
     };
+
+    // Het eindpunt van de route: eindadres, anders het startadres
+    function eindPunt() {
+        return state.endPoint || state.startPoint;
+    }
 
     // --- Map setup ---
     const map = L.map('map', {
@@ -87,22 +99,45 @@ function initApp() {
     const copyRouteBtn   = document.getElementById('copy-route-btn');
     const mapsRouteBtns  = document.getElementById('maps-route-btns');
     const courierCountInput = document.getElementById('courier-count');
+    const startAddressInput = document.getElementById('start-address');
+    const endAddressInput   = document.getElementById('end-address');
+    const startSuggestions  = document.getElementById('start-suggestions');
+    const endSuggestions    = document.getElementById('end-suggestions');
     const importFileInput   = document.getElementById('import-file');
     const stopSecondsInput  = document.getElementById('stop-seconds');
     const startTimeInput    = document.getElementById('start-time');
     const timeBreakdown     = document.getElementById('time-breakdown');
 
     // --- Marker creation ---
-    function createNumberedIcon(number, total) {
+    // `kleur` zet de bezorgerskleur; zonder kleur de standaard start/eind-opmaak.
+    function createNumberedIcon(number, total, kleur) {
         let cls = 'custom-marker';
-        if (number === 1) cls += ' start';
-        else if (number === total) cls += ' end';
+        let stijl = '';
+        if (kleur) {
+            stijl = ` style="background:${kleur};border-color:${kleur};color:#fff;"`;
+        } else if (number === 1) {
+            cls += ' start';
+        } else if (number === total) {
+            cls += ' end';
+        }
         return L.divIcon({
             className: '',
-            html: `<div class="${cls}">${number}</div>`,
+            html: `<div class="${cls}"${stijl}>${number}</div>`,
             iconSize: [32, 32],
             iconAnchor: [16, 16],
             popupAnchor: [0, -20],
+        });
+    }
+
+    // Start- en eindadres: eigen marker, geen bezorgstop
+    function createDepotIcon(letter) {
+        const cls = letter === 'S' ? 'depot-marker depot-start' : 'depot-marker depot-eind';
+        return L.divIcon({
+            className: '',
+            html: `<div class="${cls}">${letter}</div>`,
+            iconSize: [34, 34],
+            iconAnchor: [17, 17],
+            popupAnchor: [0, -22],
         });
     }
 
@@ -207,6 +242,16 @@ function initApp() {
     }
 
     function updateMarkerIcons() {
+        // Meerdere bezorgers: nummering per bezorger, in de kleur van die bezorger
+        if (state.courierRoutes && state.courierRoutes.length > 1) {
+            state.courierRoutes.forEach((route, c) => {
+                const kleur = getBezorgerKleur(c);
+                route.forEach((stop, i) => {
+                    if (stop.marker) stop.marker.setIcon(createNumberedIcon(i + 1, route.length, kleur));
+                });
+            });
+            return;
+        }
         const total = state.stops.length;
         state.stops.forEach((stop, i) => {
             stop.marker.setIcon(createNumberedIcon(i + 1, total));
@@ -214,9 +259,11 @@ function initApp() {
     }
 
     function fitMapToStops() {
-        if (state.stops.length === 0) return;
-        const bounds = L.latLngBounds(state.stops.map(s => [s.lat, s.lng]));
-        map.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
+        const punten = state.stops.map(s => [s.lat, s.lng]);
+        if (state.startPoint) punten.push([state.startPoint.lat, state.startPoint.lng]);
+        if (state.endPoint)   punten.push([state.endPoint.lat, state.endPoint.lng]);
+        if (punten.length === 0) return;
+        map.fitBounds(L.latLngBounds(punten), { padding: [50, 50], maxZoom: 14 });
     }
 
     // --- Stops list rendering ---
@@ -230,13 +277,27 @@ function initApp() {
         stopCount.textContent = `(${state.stops.length})`;
         stopsList.innerHTML = '';
 
+        // Bij meerdere bezorgers: per stop het nummer binnen die bezorgersroute
+        const perBezorger = new Map();
+        if (state.courierRoutes && state.courierRoutes.length > 1) {
+            state.courierRoutes.forEach((route, c) => {
+                route.forEach((stop, i) => {
+                    perBezorger.set(stop.id, { nummer: i + 1, kleur: getBezorgerKleur(c), bezorger: c + 1 });
+                });
+            });
+        }
+
         state.stops.forEach((stop, i) => {
             const li = document.createElement('li');
             li.className = 'stop-item';
             li.dataset.id = stop.id;
 
+            const bez = perBezorger.get(stop.id);
+            const nummerStijl = bez ? ` style="background:${bez.kleur};color:#fff;"` : '';
+            const titel = bez ? ` title="Bezorger ${bez.bezorger}, stop ${bez.nummer}"` : '';
+
             li.innerHTML = `
-                <span class="stop-number">${i + 1}</span>
+                <span class="stop-number"${nummerStijl}${titel}>${bez ? bez.nummer : i + 1}</span>
                 <span class="stop-name" title="${escapeHtml(stop.name)}">${escapeHtml(stop.name)}</span>
                 <button class="stop-remove" data-id="${stop.id}" title="Verwijder">&times;</button>
             `;
@@ -308,11 +369,17 @@ function initApp() {
     // --- Geocoding (Nominatim) ---
     let searchTimeout = null;
 
-    async function searchAddress(query) {
+    // listEl = waar de suggesties in komen, onPick(lat, lng, naam) = wat er gebeurt bij klikken
+    async function searchAddress(query, listEl = suggestionsEl, onPick = null) {
         if (query.length < 3) {
-            suggestionsEl.innerHTML = '';
+            listEl.innerHTML = '';
             return;
         }
+
+        const kies = onPick || ((lat, lng, naam) => {
+            addMarker(lat, lng, naam);
+            addressInput.value = '';
+        });
 
         try {
             const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5&addressdetails=1`;
@@ -321,16 +388,16 @@ function initApp() {
             });
             const data = await res.json();
 
-            suggestionsEl.innerHTML = '';
+            listEl.innerHTML = '';
             data.forEach(item => {
                 const li = document.createElement('li');
                 li.textContent = item.display_name;
                 li.addEventListener('click', () => {
-                    addMarker(parseFloat(item.lat), parseFloat(item.lon), item.display_name.split(',').slice(0, 3).join(','));
-                    addressInput.value = '';
-                    suggestionsEl.innerHTML = '';
+                    kies(parseFloat(item.lat), parseFloat(item.lon),
+                        item.display_name.split(',').slice(0, 3).join(','));
+                    listEl.innerHTML = '';
                 });
-                suggestionsEl.appendChild(li);
+                listEl.appendChild(li);
             });
         } catch (err) {
             console.error('Geocoding error:', err);
@@ -622,19 +689,108 @@ function initApp() {
     // --- Web Worker wrapper voor TSP (geen UI-bevriezing) ---
     // Solver zelf staat in tsp-worker.js (ook als gewoon script geladen voor de fallback)
     function solveTSPAsync(distances, roundTrip, opts = {}) {
-        const { initialOrder = null, timeBudgetMs } = opts;
+        const { initialOrder = null, timeBudgetMs, endCosts = null } = opts;
         return new Promise((resolve) => {
-            const fallback = () => resolve(solveTSP(distances, roundTrip, initialOrder, timeBudgetMs));
+            const fallback = () =>
+                resolve(solveTSP(distances, roundTrip, initialOrder, timeBudgetMs, endCosts));
             try {
                 const worker = new Worker('tsp-worker.js');
                 worker.onmessage = e => { worker.terminate(); resolve(e.data.order); };
                 worker.onerror = () => { worker.terminate(); fallback(); };
-                worker.postMessage({ distances, roundTrip, initialOrder, timeBudgetMs });
+                worker.postMessage({ distances, roundTrip, initialOrder, timeBudgetMs, endCosts });
             } catch (e) {
                 // Fallback als Web Workers niet beschikbaar zijn
                 fallback();
             }
         });
+    }
+
+    // ================================================================
+    // Verdeling over bezorgers vanaf een gedeeld start- en eindadres
+    // ================================================================
+    // Knoop-nummering die hieronder (en in split.js) geldt:
+    //   0 = startadres, i + 1 = routingStops[i], endIdx = eindadres
+    //   (endIdx is 0 als het eindadres gelijk is aan het startadres)
+
+    // Eén bezorgersroute oplossen: vaste start, vast eindpunt
+    async function tspVoorGroep(groep, dur, endIdx, aantalBezorgers) {
+        if (groep.length <= 1) return groep.slice();
+
+        // Submatrix voor deze bezorger: 0 = depot, k + 1 = groep[k]
+        const knoop = k => (k === 0 ? 0 : groep[k - 1] + 1);
+        const size = groep.length + 1;
+        const sub = [];
+        for (let a = 0; a < size; a++) {
+            const rij = new Array(size);
+            for (let b = 0; b < size; b++) rij[b] = dur(knoop(a), knoop(b));
+            sub.push(rij);
+        }
+
+        // Eind = start → rondje. Apart eindadres → kosten naar die losse knoop.
+        const rondje = endIdx === 0;
+        const endCosts = rondje ? null
+            : Array.from({ length: size }, (_, a) => dur(knoop(a), endIdx));
+
+        const budget = Math.max(400, Math.round(2000 / aantalBezorgers));
+        const order = await solveTSPAsync(sub, rondje, { timeBudgetMs: budget, endCosts });
+        return order.slice(1).map(k => groep[k - 1]);
+    }
+
+    // Verdeelt de stops over n bezorgers en optimaliseert elke deelroute.
+    // Geeft { routes, stats } terug: routes[c] = stop-indices in bezorgvolgorde.
+    async function verdeelEnOptimaliseer(routingStops, n) {
+        const start = state.startPoint;
+        const eind = eindPunt();
+        const apartEind = !!state.endPoint;
+        const m = routingStops.length;
+
+        const nodes = [start, ...routingStops];
+        if (apartEind) nodes.push(eind);
+        const endIdx = apartEind ? m + 1 : 0;
+
+        // Past in één matrix: volledige kwaliteit, echte rijtijden overal
+        if (nodes.length <= 250) {
+            const matrix = await getDistanceMatrix(nodes);
+            const dur = (a, b) => matrix.durations[a][b];
+            const dist = (a, b) => matrix.distances[a][b];
+
+            let routes = sweepVerdeling(routingStops, n, start, dur, endIdx);
+            routes = await Promise.all(routes.map(g => tspVoorGroep(g, dur, endIdx, n)));
+            if (n > 1) {
+                routes = verbeterDoorRuilen(routes, dur, endIdx, 1500);
+                routes = await Promise.all(routes.map(g => tspVoorGroep(g, dur, endIdx, n)));
+            }
+            return { routes, stats: routes.map(r => berekenBezorgerStats(r, dur, dist, endIdx)) };
+        }
+
+        // Heel groot: eerst op hoek splitsen (kost geen API-verkeer), daarna per
+        // bezorger een eigen matrix — veel goedkoper dan één reuzenmatrix.
+        console.log(`Grote route (${m} stops): splitsen op hoek, matrix per bezorger`);
+        const hav = buildHaversineMatrix(nodes);
+        const hdur = (a, b) => hav.durations[a][b];
+        let groepen = sweepVerdeling(routingStops, n, start, hdur, endIdx);
+        if (n > 1) groepen = verbeterDoorRuilen(groepen, hdur, endIdx, 1000);
+
+        const routes = [];
+        const stats = [];
+        for (const groep of groepen) {
+            const subNodes = [start, ...groep.map(i => routingStops[i])];
+            if (apartEind) subNodes.push(eind);
+            // Ruimere deadline: bij één bezorger kan deze groep nog steeds groot zijn
+            const sub = await getDistanceMatrix(subNodes, Date.now() + 30000);
+
+            // Van de volledige nummering naar de index in subNodes
+            const naarSub = new Map([[0, 0]]);
+            groep.forEach((i, k) => naarSub.set(i + 1, k + 1));
+            if (apartEind) naarSub.set(endIdx, groep.length + 1);
+            const dur = (a, b) => sub.durations[naarSub.get(a)][naarSub.get(b)];
+            const dist = (a, b) => sub.distances[naarSub.get(a)][naarSub.get(b)];
+
+            const route = await tspVoorGroep(groep, dur, endIdx, n);
+            routes.push(route);
+            stats.push(berekenBezorgerStats(route, dur, dist, endIdx));
+        }
+        return { routes, stats };
     }
 
     // --- Grote routes: clustering + per-cluster TSP ---
@@ -829,6 +985,14 @@ function initApp() {
     async function optimizeRoute() {
         if (state.stops.length < 2) return;
 
+        const courierCount = courierCountInput ? (parseInt(courierCountInput.value) || 1) : 1;
+        if (courierCount > 1 && !state.startPoint) {
+            alert('Vul eerst een startadres in.\n\nBij meerdere bezorgers vertrekken ze allemaal '
+                + 'vanaf hetzelfde adres, dus dat moet bekend zijn.');
+            return;
+        }
+        state.courierCount = courierCount;
+
         showLoading(true);
 
         try {
@@ -854,57 +1018,11 @@ function initApp() {
                 }))
                 : state.stops;
 
-            // Kies optimalisatiestrategie op basis van aantal stops
-            let optimalOrder, matrix, clusterLabels;
-            if (state.stops.length > 250) {
-                // Zeer grote route (>250): clusteren om aantal matrix-requests te beperken
-                const result = await optimizeWithClustering(routingStops);
-                optimalOrder = result.order;
-                clusterLabels = result.clusterLabels;
-                matrix = result.matrix;
+            if (state.startPoint) {
+                await optimizeMetDepot(routingStops, deliveryPoints, courierCount);
             } else {
-                // Kleine route: directe matrix + TSP via web worker
-                matrix = await getDistanceMatrix(routingStops);
-                optimalOrder = await solveTSPAsync(matrix.durations, state.roundTrip);
-                clusterLabels = null;
+                await optimizeZonderDepot(routingStops, deliveryPoints);
             }
-            state.courierClusterLabels = clusterLabels;
-
-            // Reorder stops and delivery points together
-            const reordered = optimalOrder.map(i => state.stops[i]);
-            const reorderedDP = deliveryPoints
-                ? optimalOrder.map(i => deliveryPoints[i])
-                : null;
-            state.stops = reordered;
-
-            // Splitsing over meerdere bezorgers
-            const courierCount = courierCountInput ? (parseInt(courierCountInput.value) || 1) : 1;
-            state.courierCount = courierCount;
-            if (courierCount > 1) {
-                state.courierRoutes = splitRouteAmongCouriers(state.stops, courierCount, state.courierClusterLabels);
-            } else {
-                state.courierRoutes = [];
-            }
-
-            updateMarkerIcons();
-            renderStopsList();
-
-            // Build waypoints for route using delivery-side positions
-            let routeStops = reorderedDP
-                ? state.stops.map((s, i) => ({
-                    ...s, lat: reorderedDP[i].lat, lng: reorderedDP[i].lng,
-                }))
-                : [...state.stops];
-            if (state.roundTrip && state.stops.length >= 2) {
-                routeStops.push({ ...routeStops[0] });
-            }
-
-            // Get actual route geometry
-            const route = await getRoute(routeStops);
-
-            drawRoute(route);
-            showRouteSummary(route, matrix, optimalOrder, reorderedDP);
-            fitMapToStops();
             state.optimized = true;
         } catch (err) {
             console.error('Optimization error:', err);
@@ -912,6 +1030,87 @@ function initApp() {
         } finally {
             showLoading(false);
         }
+    }
+
+    // Eén route zonder vast start- of eindadres: de eerste stop is het vertrekpunt
+    async function optimizeZonderDepot(routingStops, deliveryPoints) {
+        let optimalOrder, matrix;
+        if (state.stops.length > 250) {
+            // Zeer grote route (>250): clusteren om aantal matrix-requests te beperken
+            const result = await optimizeWithClustering(routingStops);
+            optimalOrder = result.order;
+            matrix = result.matrix;
+        } else {
+            // Kleine route: directe matrix + TSP via web worker
+            matrix = await getDistanceMatrix(routingStops);
+            optimalOrder = await solveTSPAsync(matrix.durations, state.roundTrip);
+        }
+
+        // Reorder stops and delivery points together
+        const reorderedDP = deliveryPoints ? optimalOrder.map(i => deliveryPoints[i]) : null;
+        state.stops = optimalOrder.map(i => state.stops[i]);
+        state.courierRoutes = [];
+        state.courierPlans = [];
+
+        updateMarkerIcons();
+        renderStopsList();
+
+        // Build waypoints for route using delivery-side positions
+        const routeStops = reorderedDP
+            ? state.stops.map((s, i) => ({ ...s, lat: reorderedDP[i].lat, lng: reorderedDP[i].lng }))
+            : [...state.stops];
+        if (state.roundTrip && state.stops.length >= 2) {
+            routeStops.push({ ...routeStops[0] });
+        }
+
+        const route = await getRoute(routeStops);
+        drawRoute(route);
+        showRouteSummary(route, matrix, optimalOrder, reorderedDP);
+        fitMapToStops();
+    }
+
+    // Eén of meer bezorgers die allemaal bij hetzelfde adres starten en eindigen
+    async function optimizeMetDepot(routingStops, deliveryPoints, courierCount) {
+        const origStops = state.stops;
+        const n = Math.max(1, Math.min(courierCount, origStops.length));
+        const { routes, stats } = await verdeelEnOptimaliseer(routingStops, n);
+
+        const plans = routes.map((r, c) => ({
+            idx: c,
+            kleur: getBezorgerKleur(c),
+            stops: r.map(i => origStops[i]),
+            dp: deliveryPoints ? r.map(i => deliveryPoints[i]) : null,
+            ...stats[c],
+        }));
+
+        state.stops = plans.reduce((alle, p) => alle.concat(p.stops), []);
+        state.courierRoutes = plans.map(p => p.stops);
+        state.courierStats = stats;
+        state.courierPlans = plans;
+
+        updateMarkerIcons();
+        renderStopsList();
+
+        // Geometrie per bezorger: startadres → stops → eindadres
+        const eind = eindPunt();
+        for (const p of plans) {
+            const punten = [state.startPoint];
+            p.stops.forEach((s, i) => {
+                const pos = p.dp ? p.dp[i] : s;
+                punten.push({ lat: pos.lat, lng: pos.lng });
+            });
+            punten.push(eind);
+            try {
+                p.route = await getRoute(punten.map(s => ({ lat: s.lat, lng: s.lng })));
+            } catch (err) {
+                console.warn(`Route-geometrie bezorger ${p.idx + 1} mislukt:`, err);
+                p.route = null;
+            }
+        }
+
+        drawCourierRoutes(plans);
+        showRouteSummaryDepot(plans);
+        fitMapToStops();
     }
 
     // --- Draw route on map ---
@@ -927,11 +1126,27 @@ function initApp() {
         }).addTo(map);
     }
 
+    // Eén lijn per bezorger, in de kleur van die bezorger
+    function drawCourierRoutes(plans) {
+        clearRouteLine();
+        plans.forEach((p, i) => {
+            if (!p.route) return;
+            const coords = p.route.geometry.coordinates.map(c => [c[1], c[0]]);
+            state.routeLines.push(L.polyline(coords, {
+                color: plans.length > 1 ? getBezorgerKleur(i) : '#4361ee',
+                weight: 5,
+                opacity: 0.8,
+            }).addTo(map));
+        });
+    }
+
     function clearRouteLine() {
         if (state.routeLine) {
             state.routeLine.remove();
             state.routeLine = null;
         }
+        state.routeLines.forEach(l => l.remove());
+        state.routeLines = [];
     }
 
     function clearRoute() {
@@ -939,6 +1154,11 @@ function initApp() {
         routeSummary.classList.add('hidden');
         state.optimized = false;
         state._lastRouteArgs = null;
+        state._lastDepotPlans = null;
+        state.courierRoutes = [];
+        state.courierPlans = [];
+        const courierContainer = document.getElementById('courier-routes');
+        if (courierContainer) courierContainer.innerHTML = '';
     }
 
     async function drawRouteFromStops() {
@@ -949,6 +1169,154 @@ function initApp() {
             drawRoute(route);
         } catch (err) {
             console.error('Fout bij het tekenen van route:', err);
+        }
+    }
+
+    // --- Eén stap in een routelijst (gedeeld door de globale en de bezorgerslijst) ---
+    function zijBadge(dp) {
+        if (!dp || !dp.streetSide) return '';
+        const side = dp.streetSide;
+        const isBack = side === 'achterkant';
+        return `<span class="step-side ${isBack ? 'side-back' : 'side-front'}" `
+            + `title="Brievenbus aan de ${side}">${isBack ? 'A' : 'V'}</span>`;
+    }
+
+    function maakStapElement(stop, nummer, distText, sideBadge = '') {
+        const div = document.createElement('div');
+        div.className = 'route-step';
+        div.innerHTML = `
+            <span class="step-number">${nummer}</span>
+            ${sideBadge}
+            <span class="step-info">${escapeHtml(stop.name)}</span>
+            <span class="step-distance">${distText}</span>
+        `;
+
+        // Bezorg-modus: afvink-knoppen per stap
+        if (state.bezorgModus) {
+            const status = state.bezorgStatus[stop.id];
+            if (status === 'bezorgd')    div.classList.add('stap-bezorgd');
+            if (status === 'niet-thuis') div.classList.add('stap-niet-thuis');
+
+            const acties = document.createElement('div');
+            acties.className = 'bezorg-actie-btns';
+
+            const btnOk = document.createElement('button');
+            btnOk.className = 'bz-ok' + (status === 'bezorgd' ? ' actief' : '');
+            btnOk.textContent = '✓';
+            btnOk.title = 'Bezorgd';
+            btnOk.addEventListener('click', () => setBezorgStatus(stop.id, 'bezorgd'));
+
+            const btnNt = document.createElement('button');
+            btnNt.className = 'bz-nt' + (status === 'niet-thuis' ? ' actief' : '');
+            btnNt.textContent = '✗';
+            btnNt.title = 'Niet thuis';
+            btnNt.addEventListener('click', () => setBezorgStatus(stop.id, 'niet-thuis'));
+
+            const btnNote = document.createElement('button');
+            btnNote.className = 'bz-note';
+            btnNote.textContent = '📝';
+            btnNote.title = 'Notitie';
+            btnNote.addEventListener('click', () => {
+                const note = prompt('Notitie voor dit adres:', state.bezorgNotes[stop.id] || '');
+                if (note !== null) { state.bezorgNotes[stop.id] = note.trim(); herenderBezorg(); }
+            });
+
+            acties.appendChild(btnOk);
+            acties.appendChild(btnNt);
+            acties.appendChild(btnNote);
+            div.appendChild(acties);
+
+            if (state.bezorgNotes[stop.id]) {
+                const noteEl = document.createElement('div');
+                noteEl.className = 'bezorg-note-tekst';
+                noteEl.textContent = '📝 ' + state.bezorgNotes[stop.id];
+                div.appendChild(noteEl);
+            }
+        }
+
+        return div;
+    }
+
+    // Stappenlijst van één bezorger: vanaf het startadres tot en met het eindadres
+    function renderStappenVanPlan(container, plan, clockAt) {
+        container.innerHTML = '';
+        const stopSec = state.stopSeconds;
+
+        const startDiv = document.createElement('div');
+        startDiv.className = 'route-step';
+        startDiv.innerHTML = `
+            <span class="step-number depot-step">S</span>
+            <span class="step-info">${escapeHtml(state.startPoint.name)}</span>
+            <span class="step-distance">Vertrek · ${clockAt(0)}</span>
+        `;
+        container.appendChild(startDiv);
+
+        let elapsed = 0;
+        plan.stops.forEach((stop, i) => {
+            elapsed += plan.legSec[i] + stopSec;
+            const km = (plan.legM[i] / 1000).toFixed(1);
+            const min = Math.round(plan.legSec[i] / 60);
+            container.appendChild(maakStapElement(
+                stop, i + 1,
+                `${km} km / ${min} min · ${clockAt(elapsed)}`,
+                zijBadge(plan.dp && plan.dp[i])
+            ));
+        });
+
+        const eind = eindPunt();
+        const eindDiv = document.createElement('div');
+        eindDiv.className = 'route-step';
+        eindDiv.innerHTML = `
+            <span class="step-number depot-step">E</span>
+            <span class="step-info">${escapeHtml(eind.name)}</span>
+            <span class="step-distance">${(plan.terugM / 1000).toFixed(1)} km / `
+            + `${Math.round(plan.terugSec / 60)} min · ${clockAt(elapsed + plan.terugSec)}</span>
+        `;
+        container.appendChild(eindDiv);
+    }
+
+    // --- Samenvatting met gedeeld start- en eindadres ---
+    function showRouteSummaryDepot(plans) {
+        state._lastDepotPlans = plans;
+        state._lastRouteArgs = null;
+
+        const stopSec = state.stopSeconds;
+        const afstandM = plans.reduce((s, p) => s + p.afstandM, 0);
+        const rijSec = plans.reduce((s, p) => s + p.rijSec, 0);
+        const serviceSec = state.stops.length * stopSec;
+        state._lastTravelSeconds = rijSec;
+
+        const start = getStartDate();
+        const clockAt = sec => formatClock(new Date(start.getTime() + sec * 1000));
+
+        totalDistance.textContent = `${(afstandM / 1000).toFixed(1)} km`;
+        totalStops.textContent = state.stops.length;
+
+        if (plans.length > 1) {
+            // De langste bezorger bepaalt wanneer iedereen klaar is
+            const perBezorger = plans.map(p => p.rijSec + p.stops.length * stopSec);
+            const langste = Math.max(...perBezorger);
+            totalTime.textContent = formatDuration(langste);
+            timeBreakdown.textContent =
+                `${plans.length} bezorgers · samen ${formatDuration(rijSec + serviceSec)} werk`
+                + ` · allemaal klaar ± ${clockAt(langste)}`;
+            routeSteps.innerHTML = '';
+        } else {
+            totalTime.textContent = formatDuration(rijSec + serviceSec);
+            timeBreakdown.textContent =
+                `${formatDuration(rijSec)} onderweg + ${formatDuration(serviceSec)} bij adressen`
+                + ` · klaar ± ${clockAt(rijSec + serviceSec)}`;
+            renderStappenVanPlan(routeSteps, plans[0], clockAt);
+        }
+
+        routeSummary.classList.remove('hidden');
+        renderMapsButtons();
+        renderCourierRoutes();
+
+        state.bezorgOrder = plans.length > 1 ? plans[0].stops.slice() : state.stops.slice();
+        const _bezorgBtn = document.getElementById('bezorg-btn');
+        if (_bezorgBtn && !state.bezorgModus) {
+            _bezorgBtn.style.display = plans.length > 1 ? 'none' : '';
         }
     }
 
@@ -979,9 +1347,6 @@ function initApp() {
         routeSteps.innerHTML = '';
         let elapsed = 0;
         state.stops.forEach((stop, i) => {
-            const div = document.createElement('div');
-            div.className = 'route-step';
-
             let distText = '';
             if (i > 0) {
                 const prevIdx = order[i - 1];
@@ -993,67 +1358,9 @@ function initApp() {
             } else {
                 distText = `Start · ${clockAt(0)}`;
             }
-
-            // Show mailbox side indicator (voorkant/achterkant)
-            let sideBadge = '';
-            if (deliveryPoints && deliveryPoints[i] && deliveryPoints[i].streetSide) {
-                const side = deliveryPoints[i].streetSide;
-                const isBack = side === 'achterkant';
-                sideBadge = `<span class="step-side ${isBack ? 'side-back' : 'side-front'}" ` +
-                    `title="Brievenbus aan de ${side}">${isBack ? 'A' : 'V'}</span>`;
-            }
-
-            div.innerHTML = `
-                <span class="step-number">${i + 1}</span>
-                ${sideBadge}
-                <span class="step-info">${escapeHtml(stop.name)}</span>
-                <span class="step-distance">${distText}</span>
-            `;
-
-            // Bezorg-modus: afvink-knoppen per stap
-            if (state.bezorgModus) {
-                const status = state.bezorgStatus[stop.id];
-                if (status === 'bezorgd')    div.classList.add('stap-bezorgd');
-                if (status === 'niet-thuis') div.classList.add('stap-niet-thuis');
-
-                const acties = document.createElement('div');
-                acties.className = 'bezorg-actie-btns';
-
-                const btnOk = document.createElement('button');
-                btnOk.className = 'bz-ok' + (status === 'bezorgd' ? ' actief' : '');
-                btnOk.textContent = '✓';
-                btnOk.title = 'Bezorgd';
-                btnOk.addEventListener('click', () => setBezorgStatus(stop.id, 'bezorgd'));
-
-                const btnNt = document.createElement('button');
-                btnNt.className = 'bz-nt' + (status === 'niet-thuis' ? ' actief' : '');
-                btnNt.textContent = '✗';
-                btnNt.title = 'Niet thuis';
-                btnNt.addEventListener('click', () => setBezorgStatus(stop.id, 'niet-thuis'));
-
-                const btnNote = document.createElement('button');
-                btnNote.className = 'bz-note';
-                btnNote.textContent = '📝';
-                btnNote.title = 'Notitie';
-                btnNote.addEventListener('click', () => {
-                    const note = prompt('Notitie voor dit adres:', state.bezorgNotes[stop.id] || '');
-                    if (note !== null) { state.bezorgNotes[stop.id] = note.trim(); herenderBezorg(); }
-                });
-
-                acties.appendChild(btnOk);
-                acties.appendChild(btnNt);
-                acties.appendChild(btnNote);
-                div.appendChild(acties);
-
-                if (state.bezorgNotes[stop.id]) {
-                    const noteEl = document.createElement('div');
-                    noteEl.className = 'bezorg-note-tekst';
-                    noteEl.textContent = '📝 ' + state.bezorgNotes[stop.id];
-                    div.appendChild(noteEl);
-                }
-            }
-
-            routeSteps.appendChild(div);
+            routeSteps.appendChild(
+                maakStapElement(stop, i + 1, distText, zijBadge(deliveryPoints && deliveryPoints[i]))
+            );
         });
 
         // Add return step for round trip
@@ -1150,6 +1457,10 @@ function initApp() {
         if (!e.target.closest('.search-section')) {
             suggestionsEl.innerHTML = '';
         }
+        if (!e.target.closest('.depot-wrapper')) {
+            if (startSuggestions) startSuggestions.innerHTML = '';
+            if (endSuggestions) endSuggestions.innerHTML = '';
+        }
     });
 
     // Check if user can add more addresses (limit for non-logged-in users)
@@ -1221,6 +1532,70 @@ function initApp() {
         clearRoute();
     });
 
+    // Aantal bezorgers: route vervalt, want de verdeling verandert
+    if (courierCountInput) {
+        courierCountInput.addEventListener('change', () => {
+            state.courierCount = parseInt(courierCountInput.value) || 1;
+            clearRoute();
+        });
+    }
+
+    // --- Start- en eindadres (depot) ---
+    function tekenDepotMarker(welke) {
+        const punt = welke === 'start' ? state.startPoint : state.endPoint;
+        const key = welke === 'start' ? 'startMarker' : 'endMarker';
+        if (state[key]) { state[key].remove(); state[key] = null; }
+        if (!punt) return;
+        state[key] = L.marker([punt.lat, punt.lng], {
+            icon: createDepotIcon(welke === 'start' ? 'S' : 'E'),
+            zIndexOffset: 500,
+        }).addTo(map);
+        state[key].bindPopup(
+            `<b>${welke === 'start' ? 'Start' : 'Eind'}: ${escapeHtml(punt.name)}</b>`
+        );
+    }
+
+    function setDepot(welke, punt) {
+        if (welke === 'start') state.startPoint = punt;
+        else state.endPoint = punt;
+        const input = welke === 'start' ? startAddressInput : endAddressInput;
+        if (input && punt) input.value = punt.name;
+        tekenDepotMarker(welke);
+        clearRoute();
+        fitMapToStops();
+    }
+
+    [['start', startAddressInput, startSuggestions],
+     ['end', endAddressInput, endSuggestions]].forEach(([welke, input, lijst]) => {
+        if (!input || !lijst) return;
+        let timer = null;
+
+        input.addEventListener('input', () => {
+            clearTimeout(timer);
+            const q = input.value.trim();
+            if (!q) {
+                lijst.innerHTML = '';
+                setDepot(welke, null);
+                return;
+            }
+            timer = setTimeout(() => {
+                searchAddress(q, lijst, (lat, lng, naam) => setDepot(welke, { name: naam, lat, lng }));
+            }, 400);
+        });
+
+        input.addEventListener('keydown', async (e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            clearTimeout(timer);
+            const q = input.value.trim();
+            if (!q) return;
+            lijst.innerHTML = '';
+            const r = await geocodeAddress(q);
+            if (r) setDepot(welke, { name: r.name, lat: r.lat, lng: r.lng });
+            else alert('Adres niet gevonden. Probeer een ander adres.');
+        });
+    });
+
     // Tijd per adres + starttijd: alleen de tijden opnieuw berekenen, niet de route
     try {
         const saved = parseInt(localStorage.getItem('stopSeconds'));
@@ -1229,7 +1604,9 @@ function initApp() {
     stopSecondsInput.value = state.stopSeconds;
 
     function refreshRouteTimes() {
-        if (state.optimized && state._lastRouteArgs) showRouteSummary(...state._lastRouteArgs);
+        if (!state.optimized) return;
+        if (state._lastDepotPlans) showRouteSummaryDepot(state._lastDepotPlans);
+        else if (state._lastRouteArgs) showRouteSummary(...state._lastRouteArgs);
     }
 
     stopSecondsInput.addEventListener('input', () => {
@@ -1287,11 +1664,19 @@ function initApp() {
         return urls;
     }
 
+    // Stops van een bezorger met het start- en eindadres eromheen
+    function metDepot(stops) {
+        if (!state.startPoint) return stops;
+        return [state.startPoint, ...stops, eindPunt()];
+    }
+
     function renderMapsButtons() {
         mapsRouteBtns.innerHTML = '';
+        // Bij meerdere bezorgers staat er een eigen knop in elk bezorgersblok
+        if (state.courierPlans && state.courierPlans.length > 1) return;
         if (state.stops.length < 2) return;
 
-        const urls = buildGoogleMapsUrls(state.stops, state.travelMode);
+        const urls = buildGoogleMapsUrls(metDepot(state.stops), state.travelMode);
         state.currentEtappe = 0;
 
         const btn   = document.createElement('button');
@@ -1337,9 +1722,26 @@ function initApp() {
     // Copy route list
     copyRouteBtn.addEventListener('click', () => {
         if (state.stops.length === 0) return;
-        const lines = state.stops.map((stop, i) => `${i + 1}. ${stop.name}`);
-        if (state.roundTrip && state.stops.length >= 2) {
-            lines.push(`${state.stops.length + 1}. ${state.stops[0].name} (terug)`);
+        const lines = [];
+        const plans = state.courierPlans || [];
+
+        if (plans.length > 0 && state.startPoint) {
+            const eind = eindPunt();
+            plans.forEach((p, c) => {
+                if (plans.length > 1) {
+                    if (c > 0) lines.push('');
+                    lines.push(`--- Bezorger ${c + 1} (${p.stops.length} stops, `
+                        + `${(p.afstandM / 1000).toFixed(1)} km) ---`);
+                }
+                lines.push(`Start: ${state.startPoint.name}`);
+                p.stops.forEach((stop, i) => lines.push(`${i + 1}. ${stop.name}`));
+                lines.push(`Eind: ${eind.name}`);
+            });
+        } else {
+            state.stops.forEach((stop, i) => lines.push(`${i + 1}. ${stop.name}`));
+            if (state.roundTrip && state.stops.length >= 2) {
+                lines.push(`${state.stops.length + 1}. ${state.stops[0].name} (terug)`);
+            }
         }
         const text = lines.join('\n');
         navigator.clipboard.writeText(text).then(() => {
@@ -1438,7 +1840,7 @@ function initApp() {
         document.getElementById('sidebar').style.display = '';
         map.invalidateSize();
         updateMarkerIcons();
-        if (state._lastRouteArgs) showRouteSummary(...state._lastRouteArgs);
+        refreshRouteTimes();
     }
 
     // Compact fullscreen bezorgscherm
@@ -1616,15 +2018,32 @@ function initApp() {
             courierCount: state.courierCount,
             stopSeconds: state.stopSeconds,
             startTime: state.startTime,
+            startPoint: state.startPoint,
+            endPoint: state.endPoint,
         };
 
-        // Sla ook routegegevens op als de route is geoptimaliseerd
-        if (state.optimized && state._lastRouteArgs) {
+        // Sla ook routegegevens op als de route is geoptimaliseerd.
+        // Alleen platte gegevens: stop-objecten bevatten een Leaflet-marker en
+        // die is circulair, daar loopt JSON.stringify op stuk.
+        const plat = s => ({ name: s.name, lat: s.lat, lng: s.lng });
+        if (state.optimized && state._lastDepotPlans) {
+            const plans = state._lastDepotPlans;
+            routeData.isOptimized = true;
+            routeData.distance = plans.reduce((s, p) => s + p.afstandM, 0);
+            routeData.duration = state._lastTravelSeconds;
+            routeData.courierRoutes = plans.map(p => p.stops.map(plat));
+            // Etappetijden meenemen, zodat de verdeling bij het laden compleet terugkomt
+            routeData.courierStats = plans.map(p => ({
+                legSec: p.legSec, legM: p.legM,
+                terugSec: p.terugSec, terugM: p.terugM,
+                rijSec: p.rijSec, afstandM: p.afstandM,
+            }));
+        } else if (state.optimized && state._lastRouteArgs) {
             const [route] = state._lastRouteArgs;
             routeData.isOptimized = true;
             routeData.distance = route.distance;
             routeData.duration = state._lastTravelSeconds; // alleen onderweg, zonder tijd per adres
-            routeData.courierRoutes = state.courierRoutes;
+            routeData.courierRoutes = state.courierRoutes.map(r => r.map(plat));
         }
 
         routes[naam.trim()] = routeData;
@@ -1667,11 +2086,23 @@ function initApp() {
             state.startTime = route.startTime;
             startTimeInput.value = route.startTime;
         }
+        // Start- en eindadres herstellen (oudere opgeslagen routes hebben die niet)
+        setDepot('start', route.startPoint || null);
+        setDepot('end', route.endPoint || null);
+        if (startAddressInput && !route.startPoint) startAddressInput.value = '';
+        if (endAddressInput && !route.endPoint) endAddressInput.value = '';
 
         // Als dit een geoptimaliseerde route is, toon de opgeslagen routegegevens
         if (route.isOptimized && route.distance !== undefined) {
+            // Bezorgersverdeling met depot: volledig herstellen inclusief tijden
+            if (herstelBezorgerPlannen(route)) {
+                renderStopsList();
+                updateButtons();
+                return;
+            }
+
             state.optimized = true;
-            state.courierRoutes = route.courierRoutes || [];
+            state.courierRoutes = [];
             routeSummary.classList.remove('hidden');
             // Toon opgeslagen routegegevens
             const distKm = (route.distance / 1000).toFixed(1);
@@ -1689,6 +2120,55 @@ function initApp() {
         renderStopsList();
         updateButtons();
     });
+
+    // Herstelt een opgeslagen verdeling over bezorgers: dezelfde volgorde,
+    // dezelfde etappetijden en weer een gekleurde lijn per bezorger.
+    // Geeft false als de opgeslagen route dit niet bevat (oudere routes).
+    function herstelBezorgerPlannen(route) {
+        if (!state.startPoint || !route.courierRoutes || !route.courierStats) return false;
+        const groottes = route.courierRoutes.map(r => r.length);
+        if (groottes.length !== route.courierStats.length) return false;
+        if (groottes.reduce((a, b) => a + b, 0) !== state.stops.length) return false;
+
+        const plans = [];
+        let pos = 0;
+        groottes.forEach((grootte, c) => {
+            plans.push({
+                idx: c,
+                kleur: getBezorgerKleur(c),
+                stops: state.stops.slice(pos, pos + grootte),
+                dp: null,
+                route: null,
+                ...route.courierStats[c],
+            });
+            pos += grootte;
+        });
+
+        state.optimized = true;
+        state.courierCount = plans.length;
+        state.courierRoutes = plans.map(p => p.stops);
+        state.courierStats = route.courierStats;
+        state.courierPlans = plans;
+        updateMarkerIcons();
+        showRouteSummaryDepot(plans);
+
+        // Lijnen opnieuw ophalen; de samenvatting staat er al, dit mag nakomen
+        const eind = eindPunt();
+        (async () => {
+            for (const p of plans) {
+                try {
+                    p.route = await getRoute(
+                        [state.startPoint, ...p.stops, eind].map(s => ({ lat: s.lat, lng: s.lng }))
+                    );
+                } catch (err) {
+                    console.warn(`Route-geometrie bezorger ${p.idx + 1} mislukt:`, err);
+                }
+            }
+            drawCourierRoutes(plans);
+        })();
+
+        return true;
+    }
 
     document.getElementById('delete-route-btn').addEventListener('click', () => {
         const naam = savedRoutesSelect.value;
@@ -1889,8 +2369,9 @@ function initApp() {
     // ================================================================
 
     // Encodeer stops naar een deelbare URL voor één bezorger
+    // Start- en eindadres gaan mee, zodat de bezorger zijn hele route ziet.
     function encodeStopsToURL(stops, courierIdx) {
-        const compact = stops.map(s => [
+        const compact = metDepot(stops).map(s => [
             parseFloat(s.lat.toFixed(5)),
             parseFloat(s.lng.toFixed(5)),
             s.name,
@@ -1947,30 +2428,42 @@ function initApp() {
     function renderCourierRoutes() {
         const container = document.getElementById('courier-routes');
         if (!container) return;
-        if (!state.courierRoutes || state.courierRoutes.length <= 1) {
+        const plans = state.courierPlans || [];
+        if (plans.length <= 1) {
             container.innerHTML = '';
             return;
         }
-        const samenvatting = genereerBezorgerSamenvatting(state.courierRoutes);
+
+        const stopSec = state.stopSeconds;
+        const start = getStartDate();
+        const clockAt = sec => formatClock(new Date(start.getTime() + sec * 1000));
 
         container.innerHTML = `
             <h3 style="margin:8px 0 6px;font-size:14px;font-weight:700;">
-                Verdeling over ${samenvatting.length} bezorgers
+                Verdeling over ${plans.length} bezorgers
             </h3>
-            ${samenvatting.map((b, i) => {
+            <p style="margin:0 0 8px;font-size:12px;color:#666;">
+                Allemaal vanaf ${escapeHtml(state.startPoint.name)}, terug naar ${escapeHtml(eindPunt().name)}.
+            </p>
+            ${plans.map((b, i) => {
                 const url = encodeStopsToURL(b.stops, i);
                 const qrUrl = url.length <= 2500
                     ? `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(url)}`
                     : null;
+                const totaalSec = b.rijSec + b.stops.length * stopSec;
                 return `
-                <div style="border-radius:10px;margin-bottom:8px;background:${b.kleur}12;border:1px solid ${b.kleur}40;overflow:hidden;">
+                <div class="bezorger-blok" style="background:${b.kleur}12;border:1px solid ${b.kleur}40;">
                     <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;">
-                        <span style="font-weight:700;color:${b.kleur};">Bezorger ${b.nummer}</span>
-                        <span style="font-size:13px;color:#555;">${b.aantalStops} stops</span>
+                        <span style="font-weight:700;color:${b.kleur};">Bezorger ${i + 1}</span>
+                        <span style="font-size:13px;color:#555;">${b.stops.length} stops</span>
                         <button class="start-bezorger-btn" data-idx="${i}"
                             style="margin-left:auto;padding:5px 10px;background:${b.kleur};color:white;border:none;border-radius:6px;cursor:pointer;font-size:12px;">
                             &#128666; Start
                         </button>
+                    </div>
+                    <div style="padding:0 10px 8px;font-size:12px;color:#555;">
+                        ${(b.afstandM / 1000).toFixed(1)} km · ${formatDuration(totaalSec)} ·
+                        klaar &plusmn; ${clockAt(totaalSec)}
                     </div>
                     <div style="display:flex;gap:6px;padding:0 10px 10px;flex-wrap:wrap;align-items:flex-start;">
                         <button class="kopieer-link-btn" data-url="${escapeHtml(url)}"
@@ -1983,8 +2476,17 @@ function initApp() {
                             &#9636; QR-code
                         </button>
                         ` : ''}
+                        <button class="bezorger-maps-btn" data-idx="${i}"
+                            style="padding:5px 10px;background:#f0f0f0;border:1px solid #ddd;border-radius:6px;cursor:pointer;font-size:12px;">
+                            &#128506; Maps
+                        </button>
+                        <button class="toon-stappen-btn" data-idx="${i}"
+                            style="padding:5px 10px;background:#f0f0f0;border:1px solid #ddd;border-radius:6px;cursor:pointer;font-size:12px;">
+                            &#9662; Stappen
+                        </button>
                     </div>
                     <div class="qr-container" style="display:none;padding:0 10px 10px;text-align:center;"></div>
+                    <div class="bezorger-stappen route-steps" style="display:none;"></div>
                 </div>
                 `;
             }).join('')}
@@ -2032,6 +2534,41 @@ function initApp() {
                 } else {
                     qrDiv.style.display = 'none';
                     btn.textContent = '⬛ QR-code';
+                }
+            });
+        });
+
+        // Google Maps per bezorger: opent etappe voor etappe
+        container.querySelectorAll('.bezorger-maps-btn').forEach(btn => {
+            const idx = parseInt(btn.dataset.idx);
+            const urls = buildGoogleMapsUrls(metDepot(plans[idx].stops), state.travelMode);
+            let etappe = 0;
+            const label = () => {
+                if (urls.length <= 1) return '🗺 Maps';
+                if (etappe >= urls.length) return '🏁 Klaar — opnieuw';
+                return `🗺 Maps ${etappe + 1}/${urls.length}`;
+            };
+            btn.innerHTML = label();
+            btn.addEventListener('click', () => {
+                const i = etappe >= urls.length ? 0 : etappe;
+                window.open(urls[i], '_blank');
+                etappe = i >= urls.length - 1 ? urls.length : i + 1;
+                btn.innerHTML = label();
+            });
+        });
+
+        // Uitklapbare stappenlijst per bezorger
+        container.querySelectorAll('.toon-stappen-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const blok = btn.closest('.bezorger-blok');
+                const lijst = blok.querySelector('.bezorger-stappen');
+                if (lijst.style.display === 'none') {
+                    renderStappenVanPlan(lijst, plans[parseInt(btn.dataset.idx)], clockAt);
+                    lijst.style.display = '';
+                    btn.innerHTML = '&#9652; Stappen';
+                } else {
+                    lijst.style.display = 'none';
+                    btn.innerHTML = '&#9662; Stappen';
                 }
             });
         });
