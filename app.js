@@ -679,8 +679,12 @@ function initApp() {
         }
 
         // OSRM for driving (or as fallback, met het profiel van het vervoersmiddel)
+        // continue_straight=false: bij een stop mag je keren. Zonder dit verbiedt de
+        // autoroute omdraaien bij elk adres en rijdt hij 8-16% om, terwijl de
+        // volgorde berekend is op reistijden waarin keren gewoon mag.
         const coords = stops.map(s => `${s.lng},${s.lat}`).join(';');
-        const url = `${osrmHost()}/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=true`;
+        const url = `${osrmHost()}/route/v1/driving/${coords}`
+            + '?overview=full&geometries=geojson&steps=true&continue_straight=false';
         const res = await fetchWithTimeout(url, {}, 15000);
         const data = await res.json();
         if (data.code !== 'Ok') {
@@ -690,22 +694,66 @@ function initApp() {
         return data.routes[0];
     }
 
-    // --- Web Worker wrapper voor TSP (geen UI-bevriezing) ---
-    // Solver zelf staat in tsp-worker.js (ook als gewoon script geladen voor de fallback)
+    // --- Web Workers voor de TSP (geen UI-bevriezing) ---
+    // Solver zelf staat in tsp-worker.js (ook als gewoon script geladen voor de fallback).
+    // Een vaste pool die hergebruikt wordt: per berekening een nieuwe worker
+    // starten liep op honderden workers per optimalisatie, en daarna bevroor de
+    // pagina. Klussen die niet meteen een vrije worker hebben wachten in een rij.
+    const TSP_POOL_GROOTTE = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 4) - 1));
+    const tspPool = [];       // { worker, klus }
+    const tspWachtrij = [];   // { bericht, resolve, fallback }
+
+    function tspInPagina(klus, reden) {
+        console.warn('TSP-worker niet beschikbaar, rekent in de pagina:', reden);
+        const b = klus.bericht;
+        klus.resolve(solveTSP(b.distances, b.roundTrip, b.initialOrder, b.timeBudgetMs, b.endCosts));
+    }
+
+    function geefVolgendeKlus(slot) {
+        const klus = tspWachtrij.shift();
+        if (!klus) return;
+        slot.klus = klus;
+        slot.worker.postMessage(klus.bericht);
+    }
+
+    function maakTspWorker() {
+        let worker;
+        try { worker = new Worker('tsp-worker.js'); } catch (e) { return null; }
+        const slot = { worker, klus: null };
+        worker.onmessage = e => {
+            const klus = slot.klus;
+            slot.klus = null;
+            if (klus) klus.resolve(e.data.order);
+            geefVolgendeKlus(slot);
+        };
+        worker.onerror = e => {
+            // Kapotte worker weg; de klus maken we in de pagina af
+            const klus = slot.klus;
+            slot.klus = null;
+            worker.terminate();
+            tspPool.splice(tspPool.indexOf(slot), 1);
+            if (klus) tspInPagina(klus, e && e.message);
+            // Geen workers meer over: de rest van de rij ook in de pagina
+            if (tspPool.length === 0) {
+                while (tspWachtrij.length) tspInPagina(tspWachtrij.shift(), 'geen workers meer');
+            }
+        };
+        tspPool.push(slot);
+        return slot;
+    }
+
     function solveTSPAsync(distances, roundTrip, opts = {}) {
         const { initialOrder = null, timeBudgetMs, endCosts = null } = opts;
         return new Promise((resolve) => {
-            const fallback = () =>
-                resolve(solveTSP(distances, roundTrip, initialOrder, timeBudgetMs, endCosts));
-            try {
-                const worker = new Worker('tsp-worker.js');
-                worker.onmessage = e => { worker.terminate(); resolve(e.data.order); };
-                worker.onerror = () => { worker.terminate(); fallback(); };
-                worker.postMessage({ distances, roundTrip, initialOrder, timeBudgetMs, endCosts });
-            } catch (e) {
-                // Fallback als Web Workers niet beschikbaar zijn
-                fallback();
+            const klus = { bericht: { distances, roundTrip, initialOrder, timeBudgetMs, endCosts }, resolve };
+            let vrij = tspPool.find(s => !s.klus);
+            if (!vrij && tspPool.length < TSP_POOL_GROOTTE) vrij = maakTspWorker();
+            if (!vrij && tspPool.length === 0) {
+                tspInPagina(klus, 'Web Workers niet beschikbaar');
+                return;
             }
+            tspWachtrij.push(klus);
+            if (vrij) geefVolgendeKlus(vrij);
         });
     }
 
@@ -716,9 +764,24 @@ function initApp() {
     //   0 = startadres, i + 1 = routingStops[i], endIdx = eindadres
     //   (endIdx is 0 als het eindadres gelijk is aan het startadres)
 
-    // Eén bezorgersroute oplossen: vaste start, vast eindpunt
-    async function tspVoorGroep(groep, dur, endIdx, aantalBezorgers) {
+    // Eén bezorgersroute oplossen: vaste start, vast eindpunt.
+    // opties.budgetMs: eigen tijdsbudget. opties.pogingen: zoveel onafhankelijke
+    // pogingen tegelijk (elk in een eigen worker), de kortste wint. Meerdere
+    // korte pogingen vinden vaker het optimum dan één lange.
+    async function tspVoorGroep(groep, dur, endIdx, aantalBezorgers, opties = {}) {
         if (groep.length <= 1) return groep.slice();
+        const pogingen = opties.pogingen || 1;
+        if (pogingen > 1) {
+            const uitkomsten = await Promise.all(Array.from({ length: pogingen }, () =>
+                tspVoorGroep(groep, dur, endIdx, aantalBezorgers, { ...opties, pogingen: 1 })));
+            let beste = uitkomsten[0];
+            let besteKosten = totaleRijtijd([beste], dur, endIdx);
+            for (const r of uitkomsten.slice(1)) {
+                const k = totaleRijtijd([r], dur, endIdx);
+                if (k < besteKosten) { besteKosten = k; beste = r; }
+            }
+            return beste;
+        }
 
         // Submatrix voor deze bezorger: 0 = depot, k + 1 = groep[k]
         const knoop = k => (k === 0 ? 0 : groep[k - 1] + 1);
@@ -736,7 +799,7 @@ function initApp() {
             ? Array.from({ length: size }, (_, a) => dur(knoop(a), endIdx))
             : null;
 
-        const budget = Math.max(400, Math.round(2000 / aantalBezorgers));
+        const budget = opties.budgetMs || Math.max(400, Math.round(2000 / aantalBezorgers));
         const order = await solveTSPAsync(sub, rondje, { timeBudgetMs: budget, endCosts });
         return order.slice(1).map(k => groep[k - 1]);
     }
@@ -760,20 +823,76 @@ function initApp() {
             const dur = (a, b) => matrix.durations[a][b];
             const dist = (a, b) => matrix.distances[a][b];
 
-            let routes = verdeelOverGebieden(routingStops, n, start, dur, endIdx);
-            routes = await Promise.all(routes.map(g => tspVoorGroep(g, dur, endIdx, n)));
-            if (n > 1) {
-                // Afwisselend stops verschuiven en de deelroutes opnieuw oplossen,
-                // tot het niet korter meer wordt
+            const alle = routingStops.map((_, i) => i);
+            let routes;
+
+            if (n === 1) {
+                // Drie pogingen tegelijk, de kortste wint
+                routes = [await tspVoorGroep(alle, dur, endIdx, 1, { pogingen: 3 })];
+            } else {
                 const grenzen = groepsGrenzen(m, n);
-                for (let ronde = 0; ronde < 4; ronde++) {
-                    const voor = totaleRijtijd(routes, dur, endIdx);
-                    routes = verbeterTussenBezorgers(routes, dur, endIdx, grenzen, 1200);
-                    routes = await Promise.all(routes.map(g => tspVoorGroep(g, dur, endIdx, n)));
-                    if (totaleRijtijd(routes, dur, endIdx) >= voor - 1e-6) break;
+                // Kosten van een verdeling: samen rijden + wie het laatst klaar is
+                const stopSec = state.stopSeconds;
+                const kosten = r => verdelingKosten(r, dur, endIdx, stopSec);
+
+                // Afwisselend stops tussen bezorgers verschuiven en de deelroutes
+                // opnieuw oplossen, tot het niet beter meer wordt
+                const verfijn = async (indeling, budget, verbeterMs, rondes) => {
+                    let r = await Promise.all(indeling.map(g =>
+                        tspVoorGroep(g, dur, endIdx, n, { budgetMs: budget(g) })));
+                    for (let ronde = 0; ronde < rondes; ronde++) {
+                        const voor = kosten(r);
+                        r = verbeterTussenBezorgers(r, dur, endIdx, grenzen, verbeterMs, stopSec);
+                        r = await Promise.all(r.map(g =>
+                            tspVoorGroep(g, dur, endIdx, n, { budgetMs: budget(g) })));
+                        if (kosten(r) >= voor - 1e-6) break;
+                    }
+                    return r;
+                };
+
+                // Startindelingen: zones vanuit 8 startpunten, taartpunten, en één
+                // grote ronde langs alles die op de goedkoopste plekken geknipt wordt
+                const groteRonde = await tspVoorGroep(alle, dur, endIdx, 1);
+                const geknipt = [groteRonde, groteRonde.slice().reverse()]
+                    .map(v => knipGroteRonde(v, n, dur, endIdx, grenzen));
+                const kandidaten = startIndelingen(routingStops, n, start, dur, endIdx,
+                    8, undefined, geknipt);
+
+                // Elke indeling kort uitproberen: welke het beste uitpakt zie je pas
+                // als je hem uitwerkt, niet aan een schatting vooraf
+                const snel = g => 150 + 6 * g.length;
+                const geprobeerd = [];
+                for (const kandidaat of kandidaten) {
+                    const r = await verfijn(kandidaat, snel, 400, 2);
+                    geprobeerd.push({ r, kosten: kosten(r) });
                 }
-                console.log('Verdeling per bezorger:', routes.map(r => r.length).join(' / '),
-                    `· totaal ${Math.round(totaleRijtijd(routes, dur, endIdx) / 60)} min rijden`);
+                geprobeerd.sort((a, b) => a.kosten - b.kosten);
+
+                // De beste drie volledig uitwerken
+                const volledig = () => Math.max(400, Math.round(2000 / n));
+                let besteKosten = Infinity;
+                for (const { r } of geprobeerd.slice(0, 3)) {
+                    const uitgewerkt = await verfijn(r, volledig, 1200, 4);
+                    const k = kosten(uitgewerkt);
+                    if (k < besteKosten) { besteKosten = k; routes = uitgewerkt; }
+                }
+
+                // Laatste poets: per bezorger drie pogingen tegelijk, alleen
+                // overnemen als het korter is (de solver werkt met toeval)
+                for (let c = 0; c < routes.length; c++) {
+                    const gepoetst = await tspVoorGroep(routes[c], dur, endIdx, n,
+                        { budgetMs: volledig(), pogingen: 3 });
+                    if (totaleRijtijd([gepoetst], dur, endIdx) < totaleRijtijd([routes[c]], dur, endIdx)) {
+                        routes[c] = gepoetst;
+                    }
+                }
+
+                const laatste = Math.max(...routes.map(r =>
+                    routeRijtijd(r, dur, endIdx) + stopSec * r.length));
+                console.log(`Verdeling: ${kandidaten.length} startindelingen geprobeerd,`,
+                    'per bezorger', routes.map(r => r.length).join(' / '),
+                    `· samen ${Math.round(totaleRijtijd(routes, dur, endIdx) / 60)} min rijden`,
+                    `· laatste klaar na ${Math.round(laatste / 60)} min`);
             }
             return { routes, stats: routes.map(r => berekenBezorgerStats(r, dur, dist, endIdx)) };
         }
@@ -785,7 +904,8 @@ function initApp() {
         const hdur = (a, b) => hav.durations[a][b];
         let groepen = verdeelOverGebieden(routingStops, n, start, hdur, endIdx);
         if (n > 1) {
-            groepen = verbeterTussenBezorgers(groepen, hdur, endIdx, groepsGrenzen(m, n), 1000);
+            groepen = verbeterTussenBezorgers(groepen, hdur, endIdx, groepsGrenzen(m, n), 1000,
+                state.stopSeconds);
         }
 
         const routes = [];
@@ -1058,9 +1178,17 @@ function initApp() {
             optimalOrder = result.order;
             matrix = result.matrix;
         } else {
-            // Kleine route: directe matrix + TSP via web worker
+            // Kleine route: directe matrix + TSP via web workers, drie pogingen
+            // tegelijk en de kortste wint
             matrix = await getDistanceMatrix(routingStops);
-            optimalOrder = await solveTSPAsync(matrix.durations, state.roundTrip);
+            const d = matrix.durations;
+            const kosten = o => {
+                let c = 0;
+                for (let i = 1; i < o.length; i++) c += d[o[i - 1]][o[i]];
+                return state.roundTrip ? c + d[o[o.length - 1]][o[0]] : c;
+            };
+            const pogingen = await Promise.all([0, 1, 2].map(() => solveTSPAsync(d, state.roundTrip)));
+            optimalOrder = pogingen.reduce((a, b) => (kosten(b) < kosten(a) ? b : a));
         }
 
         // Reorder stops and delivery points together

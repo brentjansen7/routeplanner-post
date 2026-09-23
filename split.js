@@ -77,14 +77,34 @@ function nnKosten(groep, dur, endIdx) {
     return kosten + naarEind(cur, dur, endIdx);
 }
 
+// Rijtijd van één bezorgersroute, van depot tot eindpunt
+function routeRijtijd(route, dur, endIdx) {
+    let t = 0;
+    let vorige = 0;
+    for (const s of route) { t += dur(vorige, s + 1); vorige = s + 1; }
+    return t + naarEind(vorige, dur, endIdx);
+}
+
 // Totale rijtijd van alle bezorgers samen (routes in bezorgvolgorde)
 function totaleRijtijd(routes, dur, endIdx) {
-    return routes.reduce((som, route) => {
-        let t = 0;
-        let vorige = 0;
-        for (const s of route) { t += dur(vorige, s + 1); vorige = s + 1; }
-        return som + t + naarEind(vorige, dur, endIdx);
-    }, 0);
+    return routes.reduce((som, route) => som + routeRijtijd(route, dur, endIdx), 0);
+}
+
+// Wat een verdeling kost: de rijtijd van iedereen samen, plus de werktijd van
+// de bezorger die het laatst klaar is. Alleen de totale rijtijd minimaliseren
+// levert soms een verdeling waarin samen een halve minuut minder gereden wordt,
+// maar één bezorger acht minuten later klaar is. Zo wegen allebei mee: een
+// minuut eerder klaar telt even zwaar als een minuut minder rijden.
+// stopSec = tijd per adres (afgeven), telt mee in wanneer iemand klaar is.
+function verdelingKosten(routes, dur, endIdx, stopSec = 0) {
+    let totaal = 0;
+    let laatste = 0;
+    for (const r of routes) {
+        const rij = routeRijtijd(r, dur, endIdx);
+        totaal += rij;
+        laatste = Math.max(laatste, rij + stopSec * r.length);
+    }
+    return totaal + laatste;
 }
 
 // ================================================================
@@ -185,22 +205,86 @@ function sweepVerdeling(stops, n, depot, dur, endIdx) {
     return beste;
 }
 
-// --- Hoofdingang: verdeel de stops over n bezorgers, per gebied ---
+// --- Alle startindelingen: zones vanuit verschillende startpunten plus de
+// taartpunten, dubbele eruit. Welke het beste uitpakt weet je pas als je ze
+// uitwerkt; een grove schatting vooraf kiest geregeld de verkeerde.
+// `extra` = indelingen die elders gemaakt zijn (zoals een geknipte grote ronde).
+function startIndelingen(stops, n, depot, dur, endIdx, aantalZones = 4, marge = BALANS_MARGE, extra = []) {
+    const m = stops.length;
+    if (n <= 1) return [[stops.map((_, i) => i)]];
+    if (m <= n) return [stops.map((_, i) => [i])];
+
+    const grenzen = groepsGrenzen(m, n, marge);
+    const uit = [];
+    const gezien = new Set();
+    const voegToe = groepen => {
+        if (groepen.length !== n || groepen.some(g => g.length === 0)) return;
+        const sleutel = JSON.stringify(groepen
+            .map(g => g.slice().sort((a, b) => a - b))
+            .sort((a, b) => a[0] - b[0]));
+        if (gezien.has(sleutel)) return;   // k-means komt vaak op dezelfde indeling uit
+        gezien.add(sleutel);
+        uit.push(groepen);
+    };
+    const startPunten = new Set();
+    for (let r = 0; r < aantalZones; r++) startPunten.add(Math.floor(r * m / aantalZones) % m);
+    for (const start of startPunten) voegToe(zoneVerdeling(stops, n, start, grenzen));
+    voegToe(sweepVerdeling(stops, n, depot, dur, endIdx));
+    for (const groepen of extra) if (groepen) voegToe(groepen);
+    return uit;
+}
+
+// --- Eerst één grote ronde, dan knippen ---
+// `volgorde` is een route langs alle stops vanaf het depot (stop-indices). Die
+// wordt in n aaneengesloten stukken geknipt, op de plekken waar dat het minst
+// kost: elk stuk rijdt depot -> stukje ronde -> eindpunt. Voor een rondje levert
+// dat soms een betere start dan zones op de kaart, omdat elke bezorger een
+// al efficiënt stuk van de lus krijgt. Geeft null als het binnen de band niet past.
+function knipGroteRonde(volgorde, n, dur, endIdx, grenzen) {
+    const m = volgorde.length;
+    if (n <= 1 || m < n) return null;
+    const knoop = k => volgorde[k] + 1;
+
+    // pre[k] = rijtijd langs de ronde van positie 0 tot positie k
+    const pre = new Array(m).fill(0);
+    for (let k = 1; k < m; k++) pre[k] = pre[k - 1] + dur(knoop(k - 1), knoop(k));
+    const stukKosten = (i, j) =>   // stops op posities i .. j-1
+        dur(0, knoop(i)) + (pre[j - 1] - pre[i]) + naarEind(knoop(j - 1), dur, endIdx);
+
+    // kosten[k][j] = goedkoopste manier om de eerste j stops met k bezorgers te doen
+    const kosten = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(Infinity));
+    const vanaf = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(-1));
+    kosten[0][0] = 0;
+    for (let k = 1; k <= n; k++) {
+        for (let j = 1; j <= m; j++) {
+            for (let lengte = grenzen.min; lengte <= grenzen.max && lengte <= j; lengte++) {
+                const i = j - lengte;
+                if (kosten[k - 1][i] === Infinity) continue;
+                const c = kosten[k - 1][i] + stukKosten(i, j);
+                if (c < kosten[k][j]) { kosten[k][j] = c; vanaf[k][j] = i; }
+            }
+        }
+    }
+    if (kosten[n][m] === Infinity) return null;
+
+    const groepen = [];
+    let j = m;
+    for (let k = n; k >= 1; k--) {
+        const i = vanaf[k][j];
+        groepen.unshift(volgorde.slice(i, j));
+        j = i;
+    }
+    return groepen;
+}
+
+// --- Eén indeling kiezen op een snelle schatting (voor heel grote routes,
+// waar uitwerken van alle startindelingen te veel matrixverkeer kost) ---
 function verdeelOverGebieden(stops, n, depot, dur, endIdx, marge = BALANS_MARGE) {
     const m = stops.length;
     if (n <= 1) return [stops.map((_, i) => i)];
     if (m <= n) return stops.map((_, i) => [i]);   // niet meer bezorgers dan stops
 
-    const grenzen = groepsGrenzen(m, n, marge);
-
-    // Meerdere indelingen proberen en de goedkoopste houden
-    const kandidaten = [];
-    const startPunten = new Set([0]);
-    for (let r = 1; r < 4; r++) startPunten.add(Math.floor(r * m / 4) % m);
-    for (const start of startPunten) {
-        kandidaten.push(zoneVerdeling(stops, n, start, grenzen));
-    }
-    kandidaten.push(sweepVerdeling(stops, n, depot, dur, endIdx));
+    const kandidaten = startIndelingen(stops, n, depot, dur, endIdx, 4, marge);
 
     let beste = null;
     let besteKosten = Infinity;
@@ -243,8 +327,25 @@ function besteInvoeging(route, s, dur, endIdx) {
 }
 
 // Zoekt één verbetering en voert die door. Geeft false als er niets meer te winnen is.
-function eenVerbetering(routes, dur, endIdx, grenzen) {
+// Een zet telt als verbetering als verdelingKosten omlaag gaat: minder rijden
+// in totaal, of eerder klaar voor wie het laatst klaar is.
+function eenVerbetering(routes, dur, endIdx, grenzen, stopSec = 0) {
     const n = routes.length;
+    const rij = routes.map(r => routeRijtijd(r, dur, endIdx));
+    const huidig = kostenMet(-1, 0, 0, -1, 0, 0);
+
+    // Kosten als routes a en b deze rijtijd en lengte zouden krijgen (-1 = geen)
+    function kostenMet(a, rijA, lenA, b, rijB, lenB) {
+        let totaal = 0;
+        let laatste = 0;
+        for (let k = 0; k < n; k++) {
+            const r = k === a ? rijA : k === b ? rijB : rij[k];
+            const len = k === a ? lenA : k === b ? lenB : routes[k].length;
+            totaal += r;
+            laatste = Math.max(laatste, r + stopSec * len);
+        }
+        return totaal + laatste;
+    }
 
     // Verplaatsen: stop van de ene bezorger naar de andere
     for (let a = 0; a < n; a++) {
@@ -255,7 +356,9 @@ function eenVerbetering(routes, dur, endIdx, grenzen) {
                 const stop = routes[a][i];
                 const winst = verwijderWinst(routes[a], i, dur, endIdx);
                 const invoeg = besteInvoeging(routes[b], stop, dur, endIdx);
-                if (winst - invoeg.kosten > EPS_SPLIT) {
+                const nieuw = kostenMet(a, rij[a] - winst, routes[a].length - 1,
+                    b, rij[b] + invoeg.kosten, routes[b].length + 1);
+                if (huidig - nieuw > EPS_SPLIT) {
                     const nieuwA = routes[a].slice();
                     nieuwA.splice(i, 1);
                     const nieuwB = routes[b].slice();
@@ -285,7 +388,9 @@ function eenVerbetering(routes, dur, endIdx, grenzen) {
                     const zonderB = routes[b].slice(); zonderB.splice(j, 1);
                     const inA = besteInvoeging(zonderA, stopB, dur, endIdx);
                     const inB = besteInvoeging(zonderB, stopA, dur, endIdx);
-                    if (winstA + winstB - inA.kosten - inB.kosten > EPS_SPLIT) {
+                    const nieuw = kostenMet(a, rij[a] - winstA + inA.kosten, routes[a].length,
+                        b, rij[b] - winstB + inB.kosten, routes[b].length);
+                    if (huidig - nieuw > EPS_SPLIT) {
                         zonderA.splice(inA.pos, 0, stopB);
                         zonderB.splice(inB.pos, 0, stopA);
                         routes[a] = zonderA;
@@ -300,11 +405,11 @@ function eenVerbetering(routes, dur, endIdx, grenzen) {
     return false;
 }
 
-function verbeterTussenBezorgers(routes, dur, endIdx, grenzen, budgetMs = 1500) {
+function verbeterTussenBezorgers(routes, dur, endIdx, grenzen, budgetMs = 1500, stopSec = 0) {
     const t0 = Date.now();
     let stappen = 0;
     while (Date.now() - t0 < budgetMs && stappen < 5000) {
-        if (!eenVerbetering(routes, dur, endIdx, grenzen)) break;
+        if (!eenVerbetering(routes, dur, endIdx, grenzen, stopSec)) break;
         stappen++;
     }
     return routes;

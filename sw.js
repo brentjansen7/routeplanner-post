@@ -1,4 +1,4 @@
-const CACHE = 'route-optimizer-v9.5';
+const CACHE = 'route-optimizer-v9.6';
 const ASSETS = [
   '/routeplanner-post/',
   '/routeplanner-post/index.html',
