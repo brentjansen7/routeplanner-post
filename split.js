@@ -11,8 +11,11 @@
 // gelijk, maar de geografie gaat voor op exact evenveel.
 //
 // Index-afspraak in dit bestand: `dur(a, b)` en `dist(a, b)` werken op
-// knoop-indices waarbij 0 = startadres, i + 1 = stops[i] en `endIdx` het
-// eindadres aanwijst (0 als het eindadres gelijk is aan het startadres).
+// knoop-indices waarbij 0 = startadres en i + 1 = stops[i]. `endIdx` wijst het
+// eindadres aan:
+//   endIdx  > 0  een apart eindadres
+//   endIdx == 0  terug naar het startadres (rondje)
+//   endIdx  < 0  open route: de bezorger stopt bij zijn laatste stop
 
 'use strict';
 
@@ -49,6 +52,12 @@ function groepsGrenzen(m, n, marge = BALANS_MARGE) {
     };
 }
 
+// Kosten van de laatste etappe naar het eindpunt. Bij een open route (endIdx < 0)
+// rijdt de bezorger na zijn laatste stop nergens meer heen, dus kost die niets.
+function naarEind(knoop, dur, endIdx) {
+    return endIdx < 0 ? 0 : dur(knoop, endIdx);
+}
+
 // --- Kosten van een groep: nearest neighbour van depot langs de stops naar het eind ---
 // Snelle schatting om indelingen te vergelijken; geen echte optimalisatie.
 function nnKosten(groep, dur, endIdx) {
@@ -65,7 +74,7 @@ function nnKosten(groep, dur, endIdx) {
         cur = over[best] + 1;
         over.splice(best, 1);
     }
-    return kosten + dur(cur, endIdx);
+    return kosten + naarEind(cur, dur, endIdx);
 }
 
 // Totale rijtijd van alle bezorgers samen (routes in bezorgvolgorde)
@@ -74,7 +83,7 @@ function totaleRijtijd(routes, dur, endIdx) {
         let t = 0;
         let vorige = 0;
         for (const s of route) { t += dur(vorige, s + 1); vorige = s + 1; }
-        return som + t + dur(vorige, endIdx);
+        return som + t + naarEind(vorige, dur, endIdx);
     }, 0);
 }
 
@@ -211,7 +220,11 @@ function verdeelOverGebieden(stops, n, depot, dur, endIdx, marge = BALANS_MARGE)
 function verwijderWinst(route, pos, dur, endIdx) {
     const vorige = pos === 0 ? 0 : route[pos - 1] + 1;
     const huidig = route[pos] + 1;
-    const volgende = pos === route.length - 1 ? endIdx : route[pos + 1] + 1;
+    if (pos === route.length - 1) {
+        // Laatste stop: hierna volgt alleen nog het eindpunt (of niets)
+        return dur(vorige, huidig) + naarEind(huidig, dur, endIdx) - naarEind(vorige, dur, endIdx);
+    }
+    const volgende = route[pos + 1] + 1;
     return dur(vorige, huidig) + dur(huidig, volgende) - dur(vorige, volgende);
 }
 
@@ -221,8 +234,9 @@ function besteInvoeging(route, s, dur, endIdx) {
     let bestePos = 0;
     for (let pos = 0; pos <= route.length; pos++) {
         const x = pos === 0 ? 0 : route[pos - 1] + 1;
-        const y = pos === route.length ? endIdx : route[pos] + 1;
-        const kosten = dur(x, s + 1) + dur(s + 1, y) - dur(x, y);
+        const kosten = pos === route.length
+            ? dur(x, s + 1) + naarEind(s + 1, dur, endIdx) - naarEind(x, dur, endIdx)
+            : dur(x, s + 1) + dur(s + 1, route[pos] + 1) - dur(x, route[pos] + 1);
         if (kosten < besteKosten) { besteKosten = kosten; bestePos = pos; }
     }
     return { kosten: besteKosten, pos: bestePos };
@@ -311,8 +325,8 @@ function berekenBezorgerStats(route, dur, dist, endIdx) {
         legM.push(dist(vorige, s + 1));
         vorige = s + 1;
     }
-    const terugSec = dur(vorige, endIdx);
-    const terugM = dist(vorige, endIdx);
+    const terugSec = naarEind(vorige, dur, endIdx);
+    const terugM = endIdx < 0 ? 0 : dist(vorige, endIdx);
     return {
         legSec, legM, terugSec, terugM,
         rijSec: legSec.reduce((a, b) => a + b, 0) + terugSec,

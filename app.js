@@ -56,9 +56,13 @@ function initApp() {
         activeCourier: 0,
     };
 
-    // Het eindpunt van de route: eindadres, anders het startadres
+    // Waar de bezorgers eindigen: het eindadres, anders terug naar het
+    // startadres als "Rondje" aan staat. Zonder beide is de route open en
+    // stopt de bezorger bij zijn laatste stop.
     function eindPunt() {
-        return state.endPoint || state.startPoint;
+        if (state.endPoint) return state.endPoint;
+        if (state.roundTrip) return state.startPoint;
+        return null;
     }
 
     // --- Map setup ---
@@ -726,10 +730,11 @@ function initApp() {
             sub.push(rij);
         }
 
-        // Eind = start → rondje. Apart eindadres → kosten naar die losse knoop.
+        // endIdx: 0 = rondje terug naar start, > 0 = apart eindadres, < 0 = open route
         const rondje = endIdx === 0;
-        const endCosts = rondje ? null
-            : Array.from({ length: size }, (_, a) => dur(knoop(a), endIdx));
+        const endCosts = endIdx > 0
+            ? Array.from({ length: size }, (_, a) => dur(knoop(a), endIdx))
+            : null;
 
         const budget = Math.max(400, Math.round(2000 / aantalBezorgers));
         const order = await solveTSPAsync(sub, rondje, { timeBudgetMs: budget, endCosts });
@@ -746,7 +751,8 @@ function initApp() {
 
         const nodes = [start, ...routingStops];
         if (apartEind) nodes.push(eind);
-        const endIdx = apartEind ? m + 1 : 0;
+        // Apart eindadres → eigen knoop; rondje → terug naar knoop 0; anders open
+        const endIdx = apartEind ? m + 1 : (eind ? 0 : -1);
 
         // Past in één matrix: volledige kwaliteit, echte rijtijden overal
         if (nodes.length <= 250) {
@@ -1110,7 +1116,7 @@ function initApp() {
                 const pos = p.dp ? p.dp[i] : s;
                 punten.push({ lat: pos.lat, lng: pos.lng });
             });
-            punten.push(eind);
+            if (eind) punten.push(eind);   // open route: stopt bij de laatste stop
             try {
                 p.route = await getRoute(punten.map(s => ({ lat: s.lat, lng: s.lng })));
             } catch (err) {
@@ -1274,7 +1280,9 @@ function initApp() {
             ));
         });
 
+        // Open route: geen eindregel, de bezorger is klaar bij zijn laatste stop
         const eind = eindPunt();
+        if (!eind) return;
         const eindDiv = document.createElement('div');
         eindDiv.className = 'route-step';
         eindDiv.innerHTML = `
@@ -1292,7 +1300,10 @@ function initApp() {
         state._lastRouteArgs = null;
 
         const stopSec = state.stopSeconds;
-        const afstandM = plans.reduce((s, p) => s + p.afstandM, 0);
+        // Afstand uit de werkelijk gereden route; alleen terugvallen op de
+        // matrix als de geometrie niet opgehaald kon worden.
+        const afstandM = plans.reduce((s, p) =>
+            s + (p.route ? p.route.distance : p.afstandM), 0);
         const rijSec = plans.reduce((s, p) => s + p.rijSec, 0);
         const serviceSec = state.stops.length * stopSec;
         state._lastTravelSeconds = rijSec;
@@ -1678,7 +1689,8 @@ function initApp() {
     // Stops van een bezorger met het start- en eindadres eromheen
     function metDepot(stops) {
         if (!state.startPoint) return stops;
-        return [state.startPoint, ...stops, eindPunt()];
+        const eind = eindPunt();
+        return eind ? [state.startPoint, ...stops, eind] : [state.startPoint, ...stops];
     }
 
     function renderMapsButtons() {
@@ -1746,7 +1758,7 @@ function initApp() {
                 }
                 lines.push(`Start: ${state.startPoint.name}`);
                 p.stops.forEach((stop, i) => lines.push(`${i + 1}. ${stop.name}`));
-                lines.push(`Eind: ${eind.name}`);
+                if (eind) lines.push(`Eind: ${eind.name}`);
             });
         } else {
             state.stops.forEach((stop, i) => lines.push(`${i + 1}. ${stop.name}`));
@@ -2164,18 +2176,19 @@ function initApp() {
         showRouteSummaryDepot(plans);
 
         // Lijnen opnieuw ophalen; de samenvatting staat er al, dit mag nakomen
-        const eind = eindPunt();
         (async () => {
             for (const p of plans) {
                 try {
                     p.route = await getRoute(
-                        [state.startPoint, ...p.stops, eind].map(s => ({ lat: s.lat, lng: s.lng }))
+                        metDepot(p.stops).map(s => ({ lat: s.lat, lng: s.lng }))
                     );
                 } catch (err) {
                     console.warn(`Route-geometrie bezorger ${p.idx + 1} mislukt:`, err);
                 }
             }
             drawCourierRoutes(plans);
+            // Nu de echte weglengtes binnen zijn: cijfers opnieuw tonen
+            showRouteSummaryDepot(plans);
         })();
 
         return true;
@@ -2454,7 +2467,8 @@ function initApp() {
                 Verdeling over ${plans.length} bezorgers
             </h3>
             <p style="margin:0 0 8px;font-size:12px;color:#666;">
-                Allemaal vanaf ${escapeHtml(state.startPoint.name)}, terug naar ${escapeHtml(eindPunt().name)}.
+                Allemaal vanaf ${escapeHtml(state.startPoint.name)}${eindPunt()
+                    ? `, daarna naar ${escapeHtml(eindPunt().name)}` : ''}.
             </p>
             ${plans.map((b, i) => {
                 const url = encodeStopsToURL(b.stops, i);
@@ -2473,7 +2487,8 @@ function initApp() {
                         </button>
                     </div>
                     <div style="padding:0 10px 8px;font-size:12px;color:#555;">
-                        ${(b.afstandM / 1000).toFixed(1)} km · ${formatDuration(totaalSec)} ·
+                        ${((b.route ? b.route.distance : b.afstandM) / 1000).toFixed(1)} km
+                        · ${formatDuration(totaalSec)} ·
                         klaar &plusmn; ${clockAt(totaalSec)}
                     </div>
                     <div style="display:flex;gap:6px;padding:0 10px 10px;flex-wrap:wrap;align-items:flex-start;">
