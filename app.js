@@ -637,14 +637,26 @@ function initApp() {
         await Promise.all(workers);
         if (failed === jobs.length) throw new Error('OSRM table: geen enkel blok gelukt');
         if (failed) console.warn(`OSRM table: ${failed} van ${jobs.length} blokken geschat`);
-        return { distances, durations };
+        return { distances, durations, geschat: failed > 0 };
     }
 
     // --- Distance Matrix (OSRM per vervoersmiddel, Haversine als fallback) ---
+    // Gelukte matrices onthouden: als de gratis server de tweede keer hapert,
+    // zou een geschatte matrix anders een andere route opleveren.
+    const matrixCache = new Map();
+
     async function getDistanceMatrix(stops, deadline = Date.now() + 15000) {
+        const sleutel = state.travelMode + '|'
+            + stops.map(s => `${s.lng.toFixed(6)},${s.lat.toFixed(6)}`).join(';');
+        const bewaard = matrixCache.get(sleutel);
+        if (bewaard) return bewaard;
         try {
             const matrix = await osrmTable(stops, deadline);
             console.log(`Distance matrix: OSRM ${state.travelMode} (${stops.length} stops)`);
+            if (!matrix.geschat) {
+                if (matrixCache.size >= 20) matrixCache.delete(matrixCache.keys().next().value);
+                matrixCache.set(sleutel, matrix);
+            }
             return matrix;
         } catch (err) {
             console.warn('OSRM table failed:', err);
@@ -706,7 +718,7 @@ function initApp() {
     function tspInPagina(klus, reden) {
         console.warn('TSP-worker niet beschikbaar, rekent in de pagina:', reden);
         const b = klus.bericht;
-        klus.resolve(solveTSP(b.distances, b.roundTrip, b.initialOrder, b.timeBudgetMs, b.endCosts));
+        klus.resolve(solveTSP(b.distances, b.roundTrip, b.initialOrder, b.timeBudgetMs, b.endCosts, b.seed));
     }
 
     function geefVolgendeKlus(slot) {
@@ -743,9 +755,9 @@ function initApp() {
     }
 
     function solveTSPAsync(distances, roundTrip, opts = {}) {
-        const { initialOrder = null, timeBudgetMs, endCosts = null } = opts;
+        const { initialOrder = null, timeBudgetMs, endCosts = null, seed = 1 } = opts;
         return new Promise((resolve) => {
-            const klus = { bericht: { distances, roundTrip, initialOrder, timeBudgetMs, endCosts }, resolve };
+            const klus = { bericht: { distances, roundTrip, initialOrder, timeBudgetMs, endCosts, seed }, resolve };
             let vrij = tspPool.find(s => !s.klus);
             if (!vrij && tspPool.length < TSP_POOL_GROOTTE) vrij = maakTspWorker();
             if (!vrij && tspPool.length === 0) {
@@ -772,8 +784,9 @@ function initApp() {
         if (groep.length <= 1) return groep.slice();
         const pogingen = opties.pogingen || 1;
         if (pogingen > 1) {
-            const uitkomsten = await Promise.all(Array.from({ length: pogingen }, () =>
-                tspVoorGroep(groep, dur, endIdx, aantalBezorgers, { ...opties, pogingen: 1 })));
+            // Elke poging een eigen (vast) zaadje: anders rekenen ze alle drie hetzelfde
+            const uitkomsten = await Promise.all(Array.from({ length: pogingen }, (_, p) =>
+                tspVoorGroep(groep, dur, endIdx, aantalBezorgers, { ...opties, pogingen: 1, seed: p + 1 })));
             let beste = uitkomsten[0];
             let besteKosten = totaleRijtijd([beste], dur, endIdx);
             for (const r of uitkomsten.slice(1)) {
@@ -800,7 +813,7 @@ function initApp() {
             : null;
 
         const budget = opties.budgetMs || Math.max(400, Math.round(2000 / aantalBezorgers));
-        const order = await solveTSPAsync(sub, rondje, { timeBudgetMs: budget, endCosts });
+        const order = await solveTSPAsync(sub, rondje, { timeBudgetMs: budget, endCosts, seed: opties.seed });
         return order.slice(1).map(k => groep[k - 1]);
     }
 
@@ -1131,6 +1144,14 @@ function initApp() {
         state.courierCount = courierCount;
 
         showLoading(true);
+
+        // Vaste invoervolgorde: na een optimalisatie staan de stops anders in de
+        // lijst, en de solver mag daar niet van afhangen. Zonder startadres is
+        // de eerste stop het vertrekpunt, die blijft vooraan.
+        const vast = state.startPoint ? 0 : 1;
+        const sleutel = s => `${s.lat.toFixed(6)},${s.lng.toFixed(6)},${s.name || ''}`;
+        state.stops = state.stops.slice(0, vast).concat(
+            state.stops.slice(vast).sort((a, b) => (sleutel(a) < sleutel(b) ? -1 : sleutel(a) > sleutel(b) ? 1 : 0)));
 
         try {
             // Detect mailbox positions using OpenStreetMap building data

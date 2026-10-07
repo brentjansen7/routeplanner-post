@@ -405,10 +405,12 @@ function eenVerbetering(routes, dur, endIdx, grenzen, stopSec = 0) {
     return false;
 }
 
+// Stopt na een vast aantal stappen (niet op de klok), zodat dezelfde adressen
+// altijd dezelfde verdeling geven. De klok is alleen een noodrem.
 function verbeterTussenBezorgers(routes, dur, endIdx, grenzen, budgetMs = 1500, stopSec = 0) {
     const t0 = Date.now();
     let stappen = 0;
-    while (Date.now() - t0 < budgetMs && stappen < 5000) {
+    while (stappen < 5000 && Date.now() - t0 < budgetMs * 10) {
         if (!eenVerbetering(routes, dur, endIdx, grenzen, stopSec)) break;
         stappen++;
     }

@@ -1,6 +1,6 @@
 // tsp-worker.js - TSP solver in een Web Worker
 // Ontvangt: { distances: number[][], roundTrip: boolean, initialOrder?: number[],
-//             timeBudgetMs?: number, endCosts?: number[] }
+//             timeBudgetMs?: number, endCosts?: number[], seed?: number }
 // Stuurt terug: { order: number[] }
 //
 // Aanpak: knoop 0 staat vast vooraan. We voegen een virtuele eindknoop toe
@@ -14,6 +14,19 @@
 
 const K_NEIGHBORS = 12;
 const EPS = 1e-6;
+
+// Vast zaadje i.p.v. Math.random: dezelfde adressen geven zo altijd dezelfde route
+let rng = maakRng(1);
+function maakRng(seed) {
+    let s = seed >>> 0;
+    return function () {
+        s = (s + 0x6D2B79F5) >>> 0;
+        let t = s;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
 
 // --- Kostenfunctie op de originele matrix ---
 function routeCost(order, dist, round, endCosts) {
@@ -202,7 +215,7 @@ function nearestNeighborPath(d, n, randomize) {
         }
         let pick = b1;
         if (randomize) {
-            const r = Math.random();
+            const r = rng();
             if (r > 0.7 && b2 >= 0) pick = b2;
             if (r > 0.9 && b3 >= 0) pick = b3;
         }
@@ -219,15 +232,15 @@ function doubleBridge(path) {
     const inner = L - 1;                 // posities 1..L-1 zijn vrij
     if (inner < 8) return path.slice();
     const win = Math.min(inner, 50);
-    const start = 1 + Math.floor(Math.random() * (inner - win + 1));
+    const start = 1 + Math.floor(rng() * (inner - win + 1));
     const cuts = new Set();
-    while (cuts.size < 3) cuts.add(start + Math.floor(Math.random() * win));
+    while (cuts.size < 3) cuts.add(start + Math.floor(rng() * win));
     const [a, b, c] = [...cuts].sort((x, y) => x - y);
     return path.slice(0, a).concat(path.slice(b, c), path.slice(a, b), path.slice(c));
 }
 
 // --- Hoofd-solver ---
-function solveTSP(distanceMatrix, roundTrip, initialOrder, timeBudgetMs, endCosts) {
+function solveTSP(distanceMatrix, roundTrip, initialOrder, timeBudgetMs, endCosts, seed) {
     const n = distanceMatrix.length;
     const round = !!roundTrip;
 
@@ -235,8 +248,14 @@ function solveTSP(distanceMatrix, roundTrip, initialOrder, timeBudgetMs, endCost
     if (n === 2) return [0, 1];
     if (n <= 8 && !initialOrder) return bruteForce(distanceMatrix, n, round, endCosts);
 
+    rng = maakRng(seed || 1);
     const t0 = Date.now();
     const budget = timeBudgetMs || Math.min(2000, 300 + 8 * n);
+    // Vast aantal pogingen i.p.v. "tot de tijd op is": zo hangt de uitkomst niet
+    // af van hoe snel de telefoon is. De klok is alleen nog een noodrem.
+    // Een ronde kost ruwweg 0,1·n ms op een laptop; afgesteld op ~budget ms daar.
+    const maxRondes = Math.max(20, Math.round(budget * 10 / n));
+    const noodrem = budget * 20;
     const d = buildExtended(distanceMatrix, round, endCosts);
     const nb = buildNeighbors(d, n + 1);
 
@@ -251,19 +270,21 @@ function solveTSP(distanceMatrix, roundTrip, initialOrder, timeBudgetMs, endCost
         consider(initialOrder.concat([n]));
     }
     consider(nearestNeighborPath(d, n, false));
-    for (let r = 0; r < 4 && Date.now() - t0 < budget / 4; r++) {
+    for (let r = 0; r < 4; r++) {
         consider(nearestNeighborPath(d, n, true));
     }
 
-    // Iterated Local Search tot het tijdsbudget op is of er lang niks verbetert
+    // Iterated Local Search tot het aantal pogingen op is of er lang niks verbetert
     const maxStale = Math.max(1500, 30 * n);
     let stale = 0;
-    while (Date.now() - t0 < budget && stale < maxStale) {
+    let rondes = 0;
+    while (rondes < maxRondes && stale < maxStale && Date.now() - t0 < noodrem) {
         for (let k = 0; k < 20; k++) {
             const t = new Tour(d, doubleBridge(best.p));
             localSearch(t, nb);
             if (t.cost() < best.cost() - EPS) { best = t; stale = 0; } else stale++;
         }
+        rondes++;
     }
 
     return best.p.slice(0, n); // eindknoop eraf
@@ -272,8 +293,8 @@ function solveTSP(distanceMatrix, roundTrip, initialOrder, timeBudgetMs, endCost
 // --- Worker message handler (niet als dit bestand als gewoon script in de pagina laadt) ---
 if (typeof WorkerGlobalScope !== 'undefined' && self instanceof WorkerGlobalScope) {
     self.onmessage = function (e) {
-        const { distances, roundTrip, initialOrder, timeBudgetMs, endCosts } = e.data;
-        const order = solveTSP(distances, roundTrip, initialOrder, timeBudgetMs, endCosts);
+        const { distances, roundTrip, initialOrder, timeBudgetMs, endCosts, seed } = e.data;
+        const order = solveTSP(distances, roundTrip, initialOrder, timeBudgetMs, endCosts, seed);
         self.postMessage({ order });
     };
 }
