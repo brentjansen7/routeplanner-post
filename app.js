@@ -637,26 +637,62 @@ function initApp() {
         await Promise.all(workers);
         if (failed === jobs.length) throw new Error('OSRM table: geen enkel blok gelukt');
         if (failed) console.warn(`OSRM table: ${failed} van ${jobs.length} blokken geschat`);
-        return { distances, durations, geschat: failed > 0 };
+        // Hele seconden en meters: zo is een bewaarde matrix precies gelijk aan een verse
+        const heel = rijen => rijen.map(rij => rij.map(Math.round));
+        return { distances: heel(distances), durations: heel(durations), geschat: failed > 0 };
+    }
+
+    // --- Netwerk-uitkomsten bewaren op het toestel ---
+    // De gratis servers haperen geregeld. Zonder opslag gaf de tweede keer dan
+    // geschatte tijden of andere brievenbusplekken, en dus een andere route.
+    // In localStorage blijft het ook na het afsluiten van de app bewaard.
+    function hashTekst(t) {
+        let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+        for (let i = 0; i < t.length; i++) {
+            const c = t.charCodeAt(i);
+            h1 = Math.imul(h1 ^ c, 2654435761);
+            h2 = Math.imul(h2 ^ c, 1597334677);
+        }
+        h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+        h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+        return (h2 >>> 0).toString(36) + (h1 >>> 0).toString(36);
+    }
+
+    function leesBewaard(soort, sleutel) {
+        try {
+            const v = JSON.parse(localStorage.getItem(`rp-${soort}-${hashTekst(sleutel)}`));
+            return v && v.sleutel === sleutel ? v.waarde : null;
+        } catch (e) { return null; }
+    }
+
+    // Houdt per soort de laatste `max` uitkomsten; is de opslag vol, dan de oudste eruit
+    function bewaar(soort, sleutel, waarde, max) {
+        const k = `rp-${soort}-${hashTekst(sleutel)}`;
+        const lijstKey = `rp-${soort}-lijst`;
+        try {
+            let lijst = JSON.parse(localStorage.getItem(lijstKey) || '[]').filter(x => x !== k);
+            const tekst = JSON.stringify({ sleutel, waarde });
+            for (;;) {
+                while (lijst.length >= max) localStorage.removeItem(lijst.pop());
+                try { localStorage.setItem(k, tekst); break; } catch (e) {
+                    if (!lijst.length) throw e;
+                    max = lijst.length;
+                }
+            }
+            localStorage.setItem(lijstKey, JSON.stringify([k, ...lijst]));
+        } catch (e) { /* geen opslag beschikbaar: dan alleen niet bewaren */ }
     }
 
     // --- Distance Matrix (OSRM per vervoersmiddel, Haversine als fallback) ---
-    // Gelukte matrices onthouden: als de gratis server de tweede keer hapert,
-    // zou een geschatte matrix anders een andere route opleveren.
-    const matrixCache = new Map();
-
     async function getDistanceMatrix(stops, deadline = Date.now() + 15000) {
         const sleutel = state.travelMode + '|'
             + stops.map(s => `${s.lng.toFixed(6)},${s.lat.toFixed(6)}`).join(';');
-        const bewaard = matrixCache.get(sleutel);
+        const bewaard = leesBewaard('matrix', sleutel);
         if (bewaard) return bewaard;
         try {
             const matrix = await osrmTable(stops, deadline);
             console.log(`Distance matrix: OSRM ${state.travelMode} (${stops.length} stops)`);
-            if (!matrix.geschat) {
-                if (matrixCache.size >= 20) matrixCache.delete(matrixCache.keys().next().value);
-                matrixCache.set(sleutel, matrix);
-            }
+            if (!matrix.geschat) bewaar('matrix', sleutel, matrix, 4);
             return matrix;
         } catch (err) {
             console.warn('OSRM table failed:', err);
@@ -667,7 +703,20 @@ function initApp() {
     }
 
     // --- Route geometry (BRouter for bike/foot, OSRM for driving) ---
+    // Gelukte lijnen onthouden zolang de app open is: valt BRouter de tweede
+    // keer terug op OSRM, dan zou dezelfde volgorde een andere lijn krijgen.
+    const routeLijnen = new Map();
+
     async function getRoute(stops) {
+        const sleutel = state.travelMode + '|' + stops.map(s => `${s.lng},${s.lat}`).join(';');
+        if (routeLijnen.has(sleutel)) return routeLijnen.get(sleutel);
+        const route = await haalRouteOp(stops);
+        if (routeLijnen.size >= 10) routeLijnen.delete(routeLijnen.keys().next().value);
+        routeLijnen.set(sleutel, route);
+        return route;
+    }
+
+    async function haalRouteOp(stops) {
         // For cycling/walking: use BRouter
         if (brouterProfile()) {
             try {
@@ -1001,6 +1050,28 @@ function initApp() {
         };
     }
 
+    // Brievenbusplekken per adres bewaren. Overpass faalt vaak; zonder opslag
+    // stonden de stops de ene keer bij de brievenbus en de andere keer niet.
+    async function brievenbussen(stops) {
+        const sleutel = s => `${s.lat.toFixed(6)},${s.lng.toFixed(6)}|${s.name || ''}`;
+        let bewaard = {};
+        try { bewaard = JSON.parse(localStorage.getItem('rp-brievenbus') || '{}'); } catch (e) { /* leeg */ }
+        if (stops.every(s => bewaard[sleutel(s)])) return stops.map(s => bewaard[sleutel(s)]);
+        try {
+            const punten = await findDeliveryWaypoints(stops);
+            stops.forEach((s, i) => { delete bewaard[sleutel(s)]; bewaard[sleutel(s)] = punten[i]; });
+            const alle = Object.keys(bewaard);
+            alle.slice(0, Math.max(0, alle.length - 3000)).forEach(k => delete bewaard[k]);
+            try { localStorage.setItem('rp-brievenbus', JSON.stringify(bewaard)); } catch (e) { /* vol */ }
+            return punten;
+        } catch (err) {
+            // Server hapert: wat al bekend is gebruiken, de rest op het adres zelf
+            if (!stops.some(s => bewaard[sleutel(s)])) throw err;
+            console.warn('Overpass mislukt, bewaarde brievenbusplekken gebruikt:', err);
+            return stops.map(s => bewaard[sleutel(s)] || { lat: s.lat, lng: s.lng, side: null });
+        }
+    }
+
     // --- Mailbox position detection via Overpass API ---
     // Queries OpenStreetMap for buildings and nearby paths to determine
     // whether mailboxes on each street are at the front (street side)
@@ -1158,7 +1229,7 @@ function initApp() {
             let deliveryPoints = null;
             if (state.travelMode !== 'driving') {
                 try {
-                    deliveryPoints = await findDeliveryWaypoints(state.stops);
+                    deliveryPoints = await brievenbussen(state.stops);
                     console.log('Delivery waypoints:', deliveryPoints.map((w, i) =>
                         `${state.stops[i].name}: ${w.streetSide || w.side || 'onbekend'}`
                     ));
