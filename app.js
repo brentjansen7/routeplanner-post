@@ -456,16 +456,14 @@ function initApp() {
     // BRouter uses OpenStreetMap data and supports footpaths, bike paths,
     // side streets, and pedestrian zones that OSRM driving ignores.
     function brouterProfile() {
-        // Both cycling and walking use the same 'trekking' profile.
-        // This ensures identical route geometry (same side streets, paths)
-        // for both modes — only the speed/duration estimate differs.
-        if (state.travelMode === 'cycling' || state.travelMode === 'foot') return 'trekking';
+        // Alleen fietsen via BRouter. Lopen niet: 'trekking' is een fietsprofiel
+        // (geen voetpaden/trappen, wel eenrichtingsverkeer). Lopen gaat via de
+        // OSRM-loopserver, dezelfde waarop de volgorde berekend is.
+        if (state.travelMode === 'cycling') return 'trekking';
         return null;
     }
 
-    // Walking uses same route as cycling but at walking speed (~5 km/h vs ~15 km/h)
     function adjustDurationForMode(duration) {
-        if (state.travelMode === 'foot') return duration * 3; // ~15km/h → ~5km/h
         return duration;
     }
 
@@ -1889,7 +1887,7 @@ function initApp() {
 
     // Google Maps navigatie
     function buildGoogleMapsUrls(stops, travelMode) {
-        const mode = { auto: 'driving', fiets: 'bicycling', lopen: 'walking' }[travelMode] || 'driving';
+        const mode = { driving: 'driving', cycling: 'bicycling', foot: 'walking' }[travelMode] || 'driving';
         const coords = stops.map(s => `${s.lat},${s.lng}`);
         const CHUNK = 11; // origin + max 9 waypoints + destination
         const urls = [];
