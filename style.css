@@ -1424,7 +1424,14 @@ body {
     box-shadow: inset 0 0 0 3px var(--surface);
 }
 
-#bs-notitie {
+#bs-extra {
+    display: flex;
+    gap: 10px;
+}
+
+#bs-terug:disabled { opacity: .4; cursor: default; }
+
+#bs-terug, #bs-notitie {
     background: var(--surface-2);
     border: none;
     border-radius: var(--r-md);
@@ -1437,7 +1444,7 @@ body {
     transition: background .15s ease;
 }
 
-#bs-notitie:hover { background: var(--surface-3); }
+#bs-terug:not(:disabled):hover, #bs-notitie:hover { background: var(--surface-3); }
 
 #bs-note-text {
     font-size: 13px;

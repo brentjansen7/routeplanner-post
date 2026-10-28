@@ -2046,6 +2046,8 @@ function initApp() {
         state.bezorgStatus = {};
         state.bezorgNotes  = {};
         state.bezorgIdx    = 0;
+        bsGeschiedenis.length = 0;
+        bsHuidig = null;
         bezorgBtn.style.display     = 'none';
         bezorgStopBtn.style.display = '';
         bezorgProgress.classList.remove('hidden');
@@ -2084,12 +2086,21 @@ function initApp() {
         refreshRouteTimes();
     }
 
+    // Terug-knop: na BEZORGD springt het scherm door, hiermee kom je terug bij
+    // de stop(s) waar je net was. Nogmaals op BEZORGD tikken zet de status uit.
+    const bsGeschiedenis = [];   // eerder getoonde stop-indices
+    let bsHuidig = null;         // stop die nu in beeld is
+    let bsTerugBezig = false;
+
     // Compact fullscreen bezorgscherm
     function updateBsScherm() {
         const stops  = state.bezorgOrder;
         if (!stops.length) return;
         const idx    = Math.max(0, Math.min(state.bezorgIdx, stops.length - 1));
         state.bezorgIdx = idx;
+        if (bsHuidig !== null && bsHuidig !== idx && !bsTerugBezig) bsGeschiedenis.push(bsHuidig);
+        bsHuidig = idx;
+        document.getElementById('bs-terug').disabled = bsGeschiedenis.length === 0;
         const stop   = stops[idx];
         const status = state.bezorgStatus[stop.id];
         document.getElementById('bs-idx').textContent = `stop ${idx + 1} / ${stops.length}`;
@@ -2139,12 +2150,26 @@ function initApp() {
         const note = prompt('Notitie:', state.bezorgNotes[stop.id] || '');
         if (note !== null) { state.bezorgNotes[stop.id] = note.trim(); updateBsScherm(); }
     });
+    document.getElementById('bs-terug').addEventListener('click', () => {
+        if (!bsGeschiedenis.length) return;
+        state.bezorgIdx = bsGeschiedenis.pop();
+        bsTerugBezig = true;
+        updateBsScherm();
+        bsTerugBezig = false;
+    });
     document.getElementById('bs-sluiten').addEventListener('click', () => {
         bezorgScherm.classList.add('hidden');
+        // De zijbalk was bij de start verborgen; zonder dit zag je alleen de kaart
+        document.getElementById('sidebar').style.display = '';
+        map.invalidateSize();
     });
     // Terug naar compact scherm vanuit routelijst
     bezorgProgress.addEventListener('click', () => {
-        if (state.bezorgModus) { bezorgScherm.classList.remove('hidden'); updateBsScherm(); }
+        if (!state.bezorgModus) return;
+        document.getElementById('sidebar').style.display = 'none';
+        bezorgScherm.classList.remove('hidden');
+        map.invalidateSize();
+        updateBsScherm();
     });
     bezorgProgress.style.cursor = 'pointer';
     bezorgProgress.title = 'Klik om bezorgscherm te openen';
